@@ -15,7 +15,7 @@ case "$ID:$VERSION_ID" in
   ubuntu:24.04) SUPPORT_LEVEL="supported" ;;
   debian:11) SUPPORT_LEVEL="legacy" ;;
   debian:12) SUPPORT_LEVEL="supported" ;;
-  debian:13) SUPPORT_LEVEL="blocked" ;;
+  debian:13) SUPPORT_LEVEL="supported" ;;
   *) SUPPORT_LEVEL="unsupported" ;;
 esac
 
@@ -25,28 +25,18 @@ echo "============================================================"
 echo ""
 echo "Supported Operating Systems:"
 echo ""
+echo "  ✔ Debian 13              (Supported)"
 echo "  ✔ Debian 12              (Recommended)"
 echo "  ✔ Ubuntu 22.04           (Recommended)"
 echo "  ✔ Ubuntu 24.04           (Supported)"
 echo "  ✔ Debian 11              (Legacy Support)"
 echo "  ✔ Ubuntu 20.04           (Legacy Support)"
 echo ""
-echo "  ⚠ Debian 13 is not supported for this script."
-echo ""
 echo "============================================================"
 sleep 2
 
-if [ "$SUPPORT_LEVEL" = "blocked" ]; then
-  echo ""
-  echo "Debian 13 detected."
-  echo "This OS is not fully supported yet."
-  echo "Please install Ubuntu 22/24, Debian 12, Ubuntu 20.04, or Debian 11."
-  echo ""
-  exit 1
-fi
-
 if [ "$SUPPORT_LEVEL" = "unsupported" ]; then
-  echo "This installer supports Ubuntu 20.04/22.04/24.04 and Debian 11/12 only."
+  echo "This installer supports Ubuntu 20.04/22.04/24.04 and Debian 11/12/13 only."
   echo "Detected: ${ID} ${VERSION_ID}"
   exit 1
 fi
@@ -54,7 +44,7 @@ fi
 if [ "$SUPPORT_LEVEL" = "legacy" ]; then
   echo "Detected ${ID} ${VERSION_ID}."
   echo "This version is allowed, but marked as legacy support."
-  echo "Ubuntu 22.04 is still the best choice."
+  echo "Ubuntu 22.04 or Debian 12/13 is recommended."
   sleep 3
 fi
 
@@ -74,6 +64,7 @@ Stunnel_Port='443' # through SSLH
 # Squid Ports
 Squid_Port1='3128'
 Squid_Port2='8000'
+
 # Node.js Socks Proxy
 WsPorts=('80' '8080' '8880' '25' '2082' '2086')  # WS ports to listen on
 WsPort='80'  # default WS port for SSLH tracking
@@ -209,9 +200,7 @@ sysctl -w net.ipv6.conf.all.disable_ipv6=1 && sysctl -w net.ipv6.conf.default.di
 
 # Add DNS server ipv4
 rm -f /etc/resolv.conf
-printf 'nameserver %s
-nameserver %s
-' "$Dns_1" "$Dns_2" > /etc/resolv.conf
+printf 'nameserver %s\nnameserver %s\n' "$Dns_1" "$Dns_2" > /etc/resolv.conf
 
 # Set System Time
 ln -fs /usr/share/zoneinfo/$MyVPS_Time /etc/localtime
@@ -233,7 +222,6 @@ if command -v dropbearkey >/dev/null 2>&1; then
   [ -f /etc/dropbear/dropbear_dss_host_key ] || dropbearkey -t dss -f /etc/dropbear/dropbear_dss_host_key
   [ -f /etc/dropbear/dropbear_ecdsa_host_key ] || dropbearkey -t ecdsa -f /etc/dropbear/dropbear_ecdsa_host_key
 fi
-
 
 # Make sure base services exist on both Debian and Ubuntu
 systemctl enable "$SSH_SERVICE" || true
@@ -264,8 +252,7 @@ systemctl status --no-pager webmin || true
 
 # Banner
 cat <<'deekay77' > /etc/zorro-luffy
-<br><img alt="TmzxboghrK0LzxE8Qp/qP6Enw++EHeVt" 
-style="display:none;">
+<br><img alt="TmzxboghrK0LzxE8Qp/qP6Enw++EHeVt" style="display:none;">
 <font color="#C12267">GURUZGH | VPN | SERVICE<br></font>
 <br>
 <font color="#b3b300"> x No DDOS<br></font>
@@ -1233,7 +1220,7 @@ buffer_mem() {
 
 server_status() {
   local ok=0
-  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-server; do
+  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-server ws-proxy; do
     systemctl is-active --quiet "$s" 2>/dev/null && ok=$((ok+1))
   done
   [ "$ok" -ge 4 ] && echo "ONLINE" || echo "CHECK"
