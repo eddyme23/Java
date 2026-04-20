@@ -1339,21 +1339,22 @@ online_users() {
 
   declare -A ssh_count dropbear_count total_count
   
-  # Parse SSH Users via active processes
+  # Parse SSH connections strictly by Process Owner
   while IFS= read -r user; do
-    if [ -n "$user" ]; then
+    # Ensure it's a real user, not root
+    if [ -n "$user" ] && [ "$user" != "root" ] && id "$user" >/dev/null 2>&1; then
       ssh_count["$user"]=$(( ${ssh_count["$user"]:-0} + 1 ))
       total_count["$user"]=$(( ${total_count["$user"]:-0} + 1 ))
     fi
-  done < <(ps -eo user,comm 2>/dev/null | awk '$2 ~ /^sshd/ && $1 != "root" {print $1}')
+  done < <(ps -eo user,comm 2>/dev/null | awk '$2=="sshd" {print $1}')
 
-  # Parse Dropbear Users via active processes
+  # Parse Dropbear connections strictly by Process Owner
   while IFS= read -r user; do
-    if [ -n "$user" ]; then
+    if [ -n "$user" ] && [ "$user" != "root" ] && id "$user" >/dev/null 2>&1; then
       dropbear_count["$user"]=$(( ${dropbear_count["$user"]:-0} + 1 ))
       total_count["$user"]=$(( ${total_count["$user"]:-0} + 1 ))
     fi
-  done < <(ps -eo user,comm 2>/dev/null | awk '$2 ~ /^dropbear/ && $1 != "root" {print $1}')
+  done < <(ps -eo user,comm 2>/dev/null | awk '$2=="dropbear" {print $1}')
 
   if [ "${#total_count[@]}" -eq 0 ]; then
     echo -e "${YELLOW}  No authenticated users are currently online.${NC}\n"
