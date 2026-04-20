@@ -61,7 +61,7 @@ Stunnel_Port_Num='4443' # For Telegram Bot Checker
 Squid_Port1='3128'
 Squid_Port2='8000'
 
-# Node.js Socks Proxy
+# Node.js Socks Proxy (80/8080/8880 are handled by Xray and forwarded to 10080)
 WsPorts=('10080' '25' '2082' '2086')  
 WsPort='10080'  
 
@@ -92,9 +92,15 @@ export OBFS PASSWORD
 
 # WebServer Ports
 Nginx_Port='85' 
+
+# DNS Resolver cloudflare dns
 Dns_1='1.1.1.1' 
 Dns_2='1.0.0.1'
+
+# Server local time
 MyVPS_Time='Africa/Accra'
+
+# Telegram IDs
 My_Chat_ID='344472672'
 My_Bot_Key='8715170470:AAE8urT5fSWdZ_xgkwwZivN4kgHW9nBVxgY'
 
@@ -110,12 +116,20 @@ function ip_address(){
 } 
 IPADDR="$(ip_address)"
 
+# Colours
 red='\e[1;31m'
 green='\e[0;32m'
 NC='\e[0m'
 
+# Requirement
 apt-get update -y
 apt-get upgrade -y --with-new-pkgs
+
+# Debian / Ubuntu compatibility detection
+if [ "${ID}" != "ubuntu" ] && [ "${ID}" != "debian" ]; then
+  echo "This installer supports Debian and Ubuntu only. Detected: ${ID}"
+  exit 1
+fi
 
 SSH_SERVICE="ssh"
 DROPBEAR_SERVICE="dropbear"
@@ -813,21 +827,24 @@ systemctl enable badvpn
 vnstat -u -i "$IFACE" 2>/dev/null || true
 systemctl enable vnstat
 
-# MENU CREATION
+# MENU CREATION - FULL AND UNCOMPRESSED
 mkdir -p /usr/local/bin
 cat > /usr/local/bin/menu <<'EOF_MENU'
 #!/bin/bash
 
+# Modern Color Palette
 RED='\033[1;31m'
 GREEN='\033[1;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[1;34m'
 CYAN='\033[1;36m'
+MAGENTA='\033[1;35m'
 WHITE='\033[1;37m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 BOLD='\033[1m'
 DOMAIN="DOMAIN_PLACEHOLDER"
 
+# --- Utility Functions ---
 server_ip() { curl -4 -s --max-time 2 ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}'; }
 cpu_count() { nproc 2>/dev/null || echo "1"; }
 mem_stats() { free -h 2>/dev/null | awk '/Mem:/ {print $2 "|" $7 "|" $3}'; }
@@ -846,6 +863,7 @@ server_status() {
 pause_return() { echo; read -rp "Press ENTER to return... " _; }
 
 # --- XRAY MANAGEMENT FUNCTIONS ---
+
 add_xray() {
   clear
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
@@ -872,26 +890,42 @@ add_xray() {
     echo "$user $uuid $exp" >> /etc/xray/vless.txt
     
     clear
-    echo -e "${GREEN}✔ VLESS Account Created!${NC}\nUsername: $user\nExpiry: $exp"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}VLESS ACCOUNT CREATED${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "Username : $user\nExpiry   : $exp"
     echo -e "\n${YELLOW}TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?path=%2Fvless&security=tls&encryption=none&insecure=1&host=${DOMAIN}&fp=randomized&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
     echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvless://${uuid}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#${user}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  
   elif [ "$prot" == "2" ]; then
     jq ".inbounds[1].settings.clients += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     jq ".inbounds[5].settings.clients += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     echo "$user $uuid $exp" >> /etc/xray/vmess.txt
+    
     clear
-    echo -e "${GREEN}✔ VMESS Account Created!${NC}\nUsername: $user\nExpiry: $exp"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}VMESS ACCOUNT CREATED${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "Username: $user\nExpiry: $exp"
     VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\",\"alpn\":\"\"}"
     echo -e "\n${YELLOW}TLS (443):${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
     VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
     echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  
   elif [ "$prot" == "3" ]; then
     pass="Guruz${uuid:0:6}"
     jq ".inbounds[2].settings.clients += [{\"password\": \"$pass\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     echo "$user $pass $exp" >> /etc/xray/trojan.txt
+    
     clear
-    echo -e "${GREEN}✔ TROJAN Account Created!${NC}\nUsername: $user\nPassword: $pass\nExpiry: $exp"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}TROJAN ACCOUNT CREATED${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "Username: $user\nPassword: $pass\nExpiry: $exp"
     echo -e "\n${YELLOW}TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?path=%2Ftrojan&security=tls&insecure=1&host=${DOMAIN}&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   fi
   systemctl restart xray
   pause_return
@@ -899,6 +933,9 @@ add_xray() {
 
 del_xray() {
   clear
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}DELETE XRAY ACCOUNT${NC}"
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to delete: " user
   if ! grep -qw "^$user" /etc/xray/*.txt 2>/dev/null; then echo -e "${YELLOW}User not found.${NC}"; pause_return; return; fi
   jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
@@ -910,6 +947,9 @@ del_xray() {
 
 renew_xray() {
   clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}RENEW XRAY ACCOUNT${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to renew: " user
   target_file=""
   for proto in vless vmess trojan; do if grep -qw "^$user" "/etc/xray/${proto}.txt"; then target_file="/etc/xray/${proto}.txt"; break; fi; done
@@ -924,6 +964,9 @@ renew_xray() {
 
 show_xray() {
   clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}SHOW XRAY CONFIG LINKS${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to view: " user
   if grep -qw "^$user" /etc/xray/vless.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
@@ -946,24 +989,252 @@ show_xray() {
 
 # --- SSH USER FUNCTIONS ---
 list_real_users() { awk -F: '$3 >= 1000 && $1 != "nobody" && $1 != "systemd-network" && $1 != "messagebus" {print $1}' /etc/passwd 2>/dev/null; }
+
+select_user() {
+  local purpose="$1"
+  mapfile -t USERS < <(list_real_users)
+  if [ "${#USERS[@]}" -eq 0 ]; then echo -e "${RED}No active user accounts found.${NC}"; return 1; fi
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  printf " %-56s \n" "${BOLD}$purpose${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  for i in "${!USERS[@]}"; do printf "  [${YELLOW}%02d${NC}] %s\n" $((i+1)) "${USERS[$i]}"; done
+  echo -e "\n  [${YELLOW}00${NC}] Back\n"
+  read -rp "  Select an account number: " idx
+  [[ "$idx" == "00" || "$idx" == "0" ]] && return 1
+  if ! [[ "$idx" =~ ^[0-9]+$ ]] || [ "$idx" -lt 1 ] || [ "$idx" -gt "${#USERS[@]}" ]; then echo -e "${RED}  Invalid selection.${NC}"; return 1; fi
+  SELECTED_USER="${USERS[$((idx-1))]}"
+  return 0
+}
+
 create_user() {
-  clear; read -rp "  Username: " user; read -rp "  Password: " pass; read -rp "  Valid for (days): " days
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}CREATE NEW SSH USER${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  read -rp "  Username: " user
+  read -rp "  Password: " pass
+  read -rp "  Valid for (days): " days
+
+  if [ -z "$user" ] || [ -z "$pass" ] || [ -z "$days" ]; then echo -e "\n${RED}  Error: All fields are required.${NC}"; pause_return; return; fi
+  if id "$user" >/dev/null 2>&1; then echo -e "\n${RED}  Error: User '$user' already exists.${NC}"; pause_return; return; fi
+
   useradd -e "$(date -d "+$days days" +%Y-%m-%d)" -s /bin/false -M "$user" && echo "$user:$pass" | chpasswd
-  echo -e "\n${GREEN}✔ SSH User Created! Expiry: $(date -d "+$days days" +%Y-%m-%d)${NC}"; pause_return
+
+  IP=$(curl -s ipv4.icanhazip.com)
+  clear
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}ACCOUNT CREATED SUCCESSFULLY${NC}"
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "  ${BOLD}IP Address${NC} : ${YELLOW}$IP${NC}"
+  echo -e "  ${BOLD}Username${NC}   : ${YELLOW}$user${NC}"
+  echo -e "  ${BOLD}Password${NC}   : ${YELLOW}$pass${NC}"
+  echo -e "  ${BOLD}Expiry${NC}     : ${YELLOW}$(date -d "+$days days" +%Y-%m-%d)${NC}"
+  echo -e "${CYAN}--------------------------------------------------------------${NC}"
+  echo -e "  SSH Port   : 22, 299"
+  echo -e "  Dropbear   : 790, 550"
+  echo -e "  SSL/TLS    : 443"
+  echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086, 25"
+  echo -e "  SlowDNS    : 5300"
+  echo -e "  BadVPN     : 7300"
+  echo -e "  Hysteria   : 20000-50000"
+  echo -e "${CYAN}--------------------------------------------------------------${NC}"
+  echo -e "  ${BOLD}DNS PUB KEY${NC}: 7fbd1f8aa0abfe15a7903e837f78aba39cf61d36f183bd604daa2fe4ef3b7b59"
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  pause_return
 }
+
 delete_user() {
-  clear; read -rp " Username to delete: " user
-  userdel -r "$user" 2>/dev/null || userdel "$user" 2>/dev/null
-  echo -e "${GREEN}✔ Deleted.${NC}"; pause_return
+  if ! select_user "DELETE SSH USER"; then pause_return; return; fi
+  clear; echo -e "${RED}Warning: You are about to delete user: ${YELLOW}$SELECTED_USER${NC}"
+  read -rp "Are you sure? [y/N]: " ans
+  if [[ "$ans" =~ ^[Yy]$ ]]; then
+    userdel -r "$SELECTED_USER" 2>/dev/null || userdel "$SELECTED_USER" 2>/dev/null
+    echo -e "${GREEN}User $SELECTED_USER has been deleted.${NC}"
+  fi
+  pause_return
 }
+
 extend_user() {
-  clear; read -rp " Username to extend: " user; read -rp " Days to add: " days
-  new_exp=$(date -d "+$days days" +%Y-%m-%d); chage -E "$new_exp" "$user"
-  echo -e "${GREEN}✔ Extended to $new_exp.${NC}"; pause_return
+  if ! select_user "EXTEND USER EXPIRY"; then pause_return; return; fi
+  clear; echo -e "Extending account for: ${YELLOW}$SELECTED_USER${NC}"
+  read -rp "Enter number of days to add: " days
+  if ! [[ "$days" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid number format.${NC}"; pause_return; return; fi
+  current=$(chage -l "$SELECTED_USER" 2>/dev/null | awk -F": " '/Account expires/ {print $2}')
+  if [ "$current" = "never" ] || [ -z "$current" ]; then new_exp=$(date -d "+$days days" +%Y-%m-%d)
+  else new_exp=$(date -d "$current +$days days" +%Y-%m-%d); fi
+  chage -E "$new_exp" "$SELECTED_USER"
+  echo -e "${GREEN}Success!${NC} Account extended.\nNew Expiry Date: ${YELLOW}$new_exp${NC}"
+  pause_return
+}
+
+online_users() {
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "               ${BOLD}ACTIVE USER SESSIONS (SSH & XRAY)${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+
+  declare -A ssh_count dropbear_count total_count
+  while IFS= read -r user; do
+    if [ -n "$user" ] && [ "$user" != "root" ] && id "$user" >/dev/null 2>&1; then
+      ssh_count["$user"]=$(( ${ssh_count["$user"]:-0} + 1 ))
+      total_count["$user"]=$(( ${total_count["$user"]:-0} + 1 ))
+    fi
+  done < <(ps -eo user,comm 2>/dev/null | awk '$2=="sshd" {print $1}')
+
+  while IFS= read -r user; do
+    if [ -n "$user" ] && [ "$user" != "root" ] && id "$user" >/dev/null 2>&1; then
+      dropbear_count["$user"]=$(( ${dropbear_count["$user"]:-0} + 1 ))
+      total_count["$user"]=$(( ${total_count["$user"]:-0} + 1 ))
+    fi
+  done < <(ps -eo user,comm 2>/dev/null | awk '$2=="dropbear" {print $1}')
+
+  echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
+  if [ "${#total_count[@]}" -eq 0 ]; then echo -e "No authenticated legacy users are currently online.\n"
+  else
+    printf "  %-20s %-10s %-12s %-8s\n" "USERNAME" "SSH" "DROPBEAR" "TOTAL"
+    echo -e "${CYAN}  ----------------------------------------------------------${NC}"
+    for user in "${!total_count[@]}"; do printf "  %-20s %-10s %-12s %-8s\n" "$user" "${ssh_count[\"$user\"]:-0}" "${dropbear_count[\"$user\"]:-0}" "${total_count[\"$user\"]:-0}"; done | sort
+  fi
+
+  echo -e "\n${YELLOW}--- XRAY CORE ACTIVE LOGINS ---${NC}"
+  grep -w "accepted" /var/log/xray/access.log | grep "email:" | tail -n 100 | awk '{print $8 " -> " $3}' | sort | uniq -c | sort -nr
+  echo
+  pause_return
+}
+
+# --- Service Controls ---
+restart_service() {
+  local service_name="$1"
+  local display_name="$2"
+  echo -e "Restarting ${display_name}..."
+  systemctl restart $service_name 2>/dev/null || true
+  echo -e "${GREEN}✔ ${display_name} restarted.${NC}"
+}
+
+service_control_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}SERVICE CONTROLS${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  [${YELLOW}01${NC}] Restart All Services"
+    echo -e "  [${YELLOW}02${NC}] Restart SSH & Dropbear"
+    echo -e "  [${YELLOW}03${NC}] Restart Node WebSocket Proxy"
+    echo -e "  [${YELLOW}04${NC}] Restart Stunnel & Xray Core"
+    echo -e "  [${YELLOW}05${NC}] Restart Squid Proxy & Nginx"
+    echo -e "  [${YELLOW}06${NC}] Restart UDP Core (SlowDNS / Hysteria / BadVPN)"
+    echo -e "  [${YELLOW}00${NC}] Back\n"
+    read -rp "  Select an option: " opt
+    case "$opt" in
+      1|01) restart_service "ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy xray" "All Services"; pause_return ;;
+      2|02) restart_service "ssh dropbear" "SSH & Dropbear"; pause_return ;;
+      3|03) restart_service "ws-proxy" "Node WebSocket Proxy"; pause_return ;;
+      4|04) restart_service "stunnel4 xray" "Stunnel & Xray Core"; pause_return ;;
+      5|05) restart_service "squid nginx" "Squid Proxy & Nginx"; pause_return ;;
+      6|06) restart_service "server-sldns hysteria-server badvpn" "UDP Core Services"; pause_return ;;
+      0|00) break ;;
+      *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
+    esac
+  done
+}
+
+# --- Backup & Restore ---
+backup_snapshot() {
+  clear; local out="/root/guruzgh_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+  echo -e "Packaging server configurations..."
+  tar -czf "$out" /etc/ssh /etc/default/dropbear /etc/stunnel /etc/squid /etc/hysteria /etc/deekayvpn /etc/systemd/system/ws-proxy.service /etc/xray 2>/dev/null
+  echo -e "\n${GREEN}✔ Backup successfully created!${NC}\nLocation: ${YELLOW}$out${NC}"
+  pause_return
+}
+
+restore_snapshot() {
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}RESTORE CONFIGURATION${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  shopt -s nullglob
+  backups=(/root/guruzgh_backup_*.tar.gz)
+  if [ ${#backups[@]} -eq 0 ]; then echo -e "${RED}  No backup files found in /root/.${NC}"; pause_return; return; fi
+  echo -e "  Available Backups:\n"
+  for i in "${!backups[@]}"; do printf "  [${YELLOW}%02d${NC}] %s\n" $((i+1)) "$(basename "${backups[$i]}")"; done
+  echo -e "\n  [${YELLOW}00${NC}] Cancel\n"
+  read -rp "  Select backup to restore: " sel
+  if [[ "$sel" == "00" || "$sel" == "0" ]]; then return; fi
+  idx=$((sel-1))
+  if [ -n "${backups[$idx]}" ]; then
+    echo -e "\nRestoring ${YELLOW}$(basename "${backups[$idx]}")${NC}..."
+    tar -xzf "${backups[$idx]}" -C /
+    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy xray 2>/dev/null || true
+    echo -e "${GREEN}✔ Restore complete!${NC}"
+  else echo -e "${RED}Invalid selection.${NC}"; fi
+  pause_return
+}
+
+# --- Advanced / Danger Zone ---
+advanced_menu() {
+  while true; do
+    clear
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                     ${BOLD}ADVANCED SETTINGS${NC}"
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  [${YELLOW}01${NC}] View Raw Hysteria JSON"
+    echo -e "  [${YELLOW}02${NC}] View Service Action Logs (Journalctl)"
+    echo -e "  [${YELLOW}03${NC}] Install System Utilities (BBR & Netflix)"
+    echo -e "  [${RED}04${NC}] Full Script Uninstall (Danger)"
+    echo -e "  [${YELLOW}00${NC}] Back\n"
+    read -rp "  Select an option: " opt
+    case "$opt" in
+      1|01) clear; cat /etc/hysteria/config.json 2>/dev/null || echo "Not found."; pause_return ;;
+      2|02) 
+        clear; echo -e "[1] SSH  [2] WS-Proxy  [3] Hysteria  [4] Stunnel  [5] SlowDNS  [6] Xray\n"
+        read -rp "Select log: " lopt
+        case "$lopt" in
+          1) journalctl -u ssh -n 50 --no-pager ;;
+          2) journalctl -u ws-proxy -n 50 --no-pager ;;
+          3) journalctl -u hysteria-server -n 50 --no-pager ;;
+          4) journalctl -u stunnel4 -n 50 --no-pager ;;
+          5) journalctl -u server-sldns -n 50 --no-pager ;;
+          6) journalctl -u xray -n 50 --no-pager ;;
+        esac; pause_return ;;
+      3|03) 
+        clear; echo -e "  [1] Install BBR\n  [2] Check Netflix\n  [0] Back"
+        read -rp " Select: " subopt
+        case "$subopt" in 
+          1) wget -N --no-check-certificate "https://raw.githubusercontent.com/chiakge/Linux-NetSpeed/master/tcp.sh" && chmod +x tcp.sh && ./tcp.sh; pause_return;; 
+          2) [ ! -f /usr/local/bin/nf ] && wget -qO /usr/local/bin/nf https://github.com/sjlleo/netflix-verify/releases/download/v3.1.0/nf_linux_amd64 && chmod +x /usr/local/bin/nf; /usr/local/bin/nf; pause_return;; 
+        esac ;;
+      4|04) remove_script ;;
+      0|00) break ;;
+    esac
+  done
+}
+
+remove_script() {
+  clear
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                     ${BOLD}FULL UNINSTALL${NC}"
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "  This action will strip all custom VPN services, configurations,"
+  echo -e "  and scripts installed by Guruz GH from your server.\n"
+  read -rp "  Are you absolutely sure? [y/N]: " ans
+  if [[ "$ans" =~ ^[Yy]$ ]]; then
+      echo -e "\nStopping services..."
+      systemctl stop ws-proxy server-sldns badvpn hysteria-server sslh stunnel4 squid dropbear nginx xray 2>/dev/null || true
+      systemctl disable ws-proxy server-sldns badvpn hysteria-server xray 2>/dev/null || true
+      echo "Deleting files..."
+      rm -f /etc/systemd/system/ws-proxy.service /etc/systemd/system/server-sldns.service /etc/systemd/system/badvpn.service /etc/systemd/system/xray.service
+      rm -f /etc/cron.d/service-checker /etc/cron.d/logrotate /etc/cron.d/xray-expiry /etc/sysctl.d/99-freenet-tuning.conf /etc/security/limits.d/99-freenet.conf
+      rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /usr/local/bin/menu /usr/bin/menu /usr/bin/Menu
+      systemctl daemon-reload; sysctl --system >/dev/null 2>&1 || true
+      echo -e "${GREEN}✔ Removal complete.${NC}"
+  else echo "Cancelled."; fi
+  pause_return
 }
 
 # --- Main Dashboard ---
 draw_header() {
+  IFS='|' read -r TOTAL FREE USED <<< "$(mem_stats)"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
   echo -e "${BLUE}       >>>>>  🐉  ${YELLOW}${BOLD}Guruz GH${NC}${BLUE}  ✸  ${YELLOW}${BOLD}Plus${NC}${BLUE}  🐉  <<<<<${NC}"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
@@ -986,21 +1257,33 @@ while true; do
   clear; draw_header; echo
   echo -e "  [${YELLOW}01${NC}] SSH Account Management (Legacy)"
   echo -e "  [${YELLOW}02${NC}] Xray Account Management (V2ray)"
-  echo -e "  [${YELLOW}03${NC}] Service Controls (Restart Protocols)"
-  echo -e "  [${YELLOW}04${NC}] Update Xray Core Version"
-  echo -e "  [${YELLOW}05${NC}] Reboot Server"
+  echo -e "  [${YELLOW}03${NC}] Monitor Active Connections"
+  echo -e "  [${YELLOW}04${NC}] Service Controls (Restart Protocols)"
+  echo -e "  [${YELLOW}05${NC}] Backup & Restore Data"
+  echo -e "  [${YELLOW}06${NC}] Advanced Settings & Utilities"
+  echo -e "  [${YELLOW}07${NC}] Reboot Server"
   echo -e "  [${RED}00${NC}] Exit\n"
   read -rp "  ► Select an option: " opt
   case "$opt" in
     1|01) 
-      clear; echo -e "  [1] Create  [2] Extend  [3] Delete  [0] Back"
-      read -rp "  Option: " sub; case "$sub" in 1) create_user;; 2) extend_user;; 3) delete_user;; esac ;;
+      while true; do
+        clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}SSH ACCOUNT MANAGEMENT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "  [${YELLOW}1${NC}] Create SSH User\n  [${YELLOW}2${NC}] Extend User Expiry\n  [${YELLOW}3${NC}] Delete SSH User\n  [${YELLOW}4${NC}] List All Accounts\n  [${YELLOW}0${NC}] Back\n"
+        read -rp "  ► Option: " sub; case "$sub" in 1) create_user;; 2) extend_user;; 3) delete_user;; 4) list_real_users | nl -w2 -s'. '; pause_return;; 0) break;; esac
+      done ;;
     2|02) 
-      clear; echo -e "  [1] Add  [2] Renew  [3] Delete  [4] Show Configs  [0] Back"
-      read -rp "  Option: " sub; case "$sub" in 1) add_xray;; 2) renew_xray;; 3) del_xray;; 4) show_xray;; esac ;;
-    3|03) systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy xray; echo "Restarted."; pause_return ;;
-    4|04) systemctl stop xray; wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"; unzip -q -o /tmp/xray.zip -d /tmp/xray/ && mv -f /tmp/xray/xray /usr/local/bin/xray; systemctl start xray; echo "Updated."; pause_return ;;
-    5|05) reboot ;;
+      while true; do
+        clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}XRAY ACCOUNT MANAGEMENT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "  [${YELLOW}1${NC}] Add Xray Account\n  [${YELLOW}2${NC}] Renew Xray Account\n  [${YELLOW}3${NC}] Delete Xray Account\n  [${YELLOW}4${NC}] Show Config Links\n  [${YELLOW}5${NC}] Force Delete Expired Xray Users Now\n  [${YELLOW}6${NC}] Update Xray Core Version\n  [${YELLOW}0${NC}] Back\n"
+        read -rp "  ► Option: " sub; case "$sub" in 1) add_xray;; 2) renew_xray;; 3) del_xray;; 4) show_xray;; 5) /usr/local/bin/exp-check; echo "Expired Xray users wiped."; pause_return;; 6) systemctl stop xray; wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"; unzip -q -o /tmp/xray.zip -d /tmp/xray/ && mv -f /tmp/xray/xray /usr/local/bin/xray; systemctl start xray; echo -e "${GREEN}✔ Xray Updated!${NC}"; pause_return;; 0) break;; esac
+      done ;;
+    3|03) online_users ;;
+    4|04) service_control_menu ;;
+    5|05)
+      clear; echo -e "  [1] Backup System Configs\n  [2] Restore From Backup\n  [0] Back"
+      read -rp " Select: " subopt; case "$subopt" in 1) backup_snapshot;; 2) restore_snapshot;; esac ;;
+    6|06) advanced_menu ;;
+    7|07) clear; read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
     0|00) clear; exit 0 ;;
   esac
 done
