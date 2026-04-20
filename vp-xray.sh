@@ -10,17 +10,12 @@ source /etc/os-release
 
 SUPPORT_LEVEL="unsupported"
 case "$ID:$VERSION_ID" in
-  ubuntu:20.04) SUPPORT_LEVEL="legacy" ;;
-  ubuntu:22.04) SUPPORT_LEVEL="recommended" ;;
-  ubuntu:24.04) SUPPORT_LEVEL="supported" ;;
-  debian:11) SUPPORT_LEVEL="legacy" ;;
-  debian:12) SUPPORT_LEVEL="supported" ;;
-  debian:13) SUPPORT_LEVEL="supported" ;;
+  ubuntu:20.04|ubuntu:22.04|ubuntu:24.04|debian:11|debian:12|debian:13) SUPPORT_LEVEL="supported" ;;
   *) SUPPORT_LEVEL="unsupported" ;;
 esac
 
 echo "============================================================"
-echo "              Guruz GH SSH & XRAY Script Installer"
+echo "         Guruz GH Ultimate SSH & XRAY Script Installer"
 echo "============================================================"
 echo ""
 echo "Supported Operating Systems:"
@@ -35,15 +30,8 @@ fi
 
 # === PROMPTS & VARIABLES ===
 
-# 1. Domain for Xray TLS
-read -p "Enter your Domain/Subdomain for Xray TLS (MUST point to VPS IP): " -e -i "vpn.yourdomain.com" DOMAIN
+read -p "Enter your Domain/Subdomain (or press enter for VPS IP): " -e -i "$(curl -4 -s ipv4.icanhazip.com)" DOMAIN
 export DOMAIN
-
-# 2. Xray Secrets
-UUID_VLESS=$(cat /proc/sys/kernel/random/uuid)
-UUID_VMESS=$(cat /proc/sys/kernel/random/uuid)
-TROJAN_PASS="Guruz$(date +%s | sha256sum | head -c 8)"
-export UUID_VLESS UUID_VMESS TROJAN_PASS
 
 # OpenSSH Ports
 SSH_Port1='22'
@@ -51,9 +39,9 @@ SSH_Port2='299'
 
 # Dropbear Ports
 Dropbear_Port1='790'
-Dropbear_Port2='550'
+Dropbear_Port2='550' 
 
-# Stunnel (Shifted to internal for Xray Fallback)
+# Stunnel (Internal Fallback)
 Stunnel_Port='127.0.0.1:4443' 
 
 # Squid Ports
@@ -61,9 +49,7 @@ Squid_Port1='3128'
 Squid_Port2='8000'
 
 # Node.js Socks Proxy (Xray fallbacks & Direct WS)
-# 10080, 10808, 10888 receive fallback traffic from Xray.
-# 25, 2082, 2086 remain direct public listeners.
-WsPorts=('10080' '10808' '10888' '25' '2082' '2086')  
+WsPorts=('10080' '25' '2082' '2086')  
 WsPort='10080'  
 
 # SSLH Port
@@ -90,34 +76,20 @@ else
 fi
 export OBFS PASSWORD
 
-# WebServer Ports
+# WebServer Port
 Nginx_Port='85' 
-
-# DNS Resolver
-Dns_1='1.1.1.1' 
-Dns_2='1.0.0.1'
-
-# Server local time
 MyVPS_Time='Africa/Accra'
-
-# Telegram IDs
-My_Chat_ID='344472672'
-My_Bot_Key='8715170470:AAE8urT5fSWdZ_xgkwwZivN4kgHW9nBVxgY'
 
 ######################################
 ### INSTALLATION BEGINS ##############
 ######################################
 
-function ip_address(){
+ip_address(){
   local IP="$( ip addr | egrep -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | egrep -v "^192\.168|^172\.1[6-9]\.|^172\.2[0-9]\.|^172\.3[0-2]\.|^10\.|^127\.|^255\.|^0\." | head -n 1 )"
   [ -z "${IP}" ] && IP="$( wget -qO- -t1 -T2 ipv4.icanhazip.com )"
-  [ ! -z "${IP}" ] && echo "${IP}" || echo
+  echo "${IP}"
 } 
 IPADDR="$(ip_address)"
-
-red='\e[1;31m'
-green='\e[0;32m'
-NC='\e[0m'
 
 apt-get update -y
 apt-get upgrade -y --with-new-pkgs
@@ -133,7 +105,6 @@ SFTP_SUBSYSTEM="internal-sftp"
 mkdir -p /etc/dropbear /etc/stunnel /etc/nginx/conf.d /etc/deekayvpn /var/run/sslh /etc/xray
 
 ssh-keygen -A >/dev/null 2>&1 || true
-touch /etc/resolv.conf
 
 PACKAGE_LIST=(
   neofetch sslh dnsutils stunnel4 squid dropbear nano sudo wget unzip tar gzip
@@ -154,14 +125,8 @@ echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6
 sysctl -w net.ipv6.conf.all.disable_ipv6=1 && sysctl -w net.ipv6.conf.default.disable_ipv6=1
 
 rm -f /etc/resolv.conf
-printf 'nameserver %s\nnameserver %s\n' "$Dns_1" "$Dns_2" > /etc/resolv.conf
+printf 'nameserver 1.1.1.1\nnameserver 1.0.0.1\n' > /etc/resolv.conf
 ln -fs /usr/share/zoneinfo/$MyVPS_Time /etc/localtime
-
-cat > /root/.profile <<'EOF_PROFILE'
-clear
-echo "Script By Guruz GH"
-echo "Type 'menu' To List Commands"
-EOF_PROFILE
 
 apt-get install -y "${AVAILABLE_PACKAGES[@]}"
 
@@ -172,45 +137,85 @@ if command -v dropbearkey >/dev/null 2>&1; then
 fi
 
 systemctl enable "$SSH_SERVICE" || true
-systemctl enable rsyslog || true
 systemctl restart rsyslog || true
 gem install lolcat
 apt -y --purge remove apache2 ufw firewalld
 systemctl stop nginx
 
-# === CERTIFICATE GENERATION ===
-echo "Generating SSL Certificates for $DOMAIN..."
-curl https://get.acme.sh | sh -s email=admin@$DOMAIN
+# === HARDCODED CERTIFICATE GENERATION ===
+echo "Applying default hardcoded SSL Certificate for Xray & Stunnel..."
 
-# Force Let's Encrypt to avoid the ZeroSSL EAB hang
-/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-/root/.acme.sh/acme.sh --register-account -m admin@$DOMAIN
+cat <<'EOF_KEY' > /etc/xray/xray.key
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQClmgCdm7RB2VWK
+wfH8HO/T9bxEddWDsB3fJKpM/tiVMt4s/WMdGJtFdRlxzUb03u+HT6t00sLlZ78g
+ngjxLpJGFpHAGdVf9vACBtrxv5qcrG5gd8k7MJ+FtMTcjeQm8kVRyIW7cOWxlpGY
+6jringYZ6NcRTrh/OlxIHKdsLI9ddcekbYGyZVTm1wd22HVG+07PH/AeyY78O2+Z
+tbjxGTFRSYt3jUaFeUmWNtxqWnR4MPmC+6iKvUKisV27P89g8v8CiZynAAWRJ0+A
+qp+PWxwHi/iJ501WdLspeo8VkXIb3PivyIKC356m+yuuibD2uqwLZ2//afup84Qu
+pRtgW/PbAgMBAAECggEAVo/efIQUQEtrlIF2jRNPJZuQ0rRJbHGV27tdrauU6MBT
+NG8q7N2c5DymlT75NSyHRlKVzBYTPDjzxgf1oqR2X16Sxzh5uZTpthWBQtal6fmU
+JKbYsDDlYc2xDZy5wsXnCC3qAaWs2xxadPUS3Lw/cjGsoeZlOFP4QtV/imLseaws
+7r4KZE7SVO8dF8Xtcy304Bd7UsKClnbCrGsABUF/rqA8g34o7yrpo9XqcwbF5ihQ
+TbnB0Ns8Bz30pjgGjJZTdTL3eskP9qMJWo/JM76kSaJWReoXTws4DlQHxO29z3eK
+zKdxieXaBGMwFnv23JvXKJ5eAnxzqsL6a+SuNPPN4QKBgQDQhisSDdjUJWy0DLnJ
+/HjtsnQyfl0efOqAlUEir8r5IdzDTtAEcW6GwPj1rIOm79ZeyysT1pGN6eulzS1i
+6lz6/c5uHA9Z+7LT48ZaQjmKF06ItdfHI9ytoXaaQPMqW7NnyOFxCcTHBabmwQ+E
+QZDFkM6vVXL37Sz4JyxuIwCNMQKBgQDLThgKi+L3ps7y1dWayj+Z0tutK2JGDww7
+6Ze6lD5gmRAURd0crIF8IEQMpvKlxQwkhqR4vEsdkiFFJQAaD+qZ9XQOkWSGXvKP
+A/yzk0Xu3qL29ZqX+3CYVjkDbtVOLQC9TBG60IFZW79K/Zp6PhHkO8w6l+CBR+yR
+X4+8x1ReywKBgQCfSg52wSski94pABugh4OdGBgZRlw94PCF/v390En92/c3Hupa
+qofi2mCT0w/Sox2f1hV3Fw6jWNDRHBYSnLMgbGeXx0mW1GX75OBtrG8l5L3yQu6t
+SeDWpiPim8DlV52Jp3NHlU3DNrcTSOFgh3Fe6kpot56Wc5BJlCsliwlt0QKBgEol
+u0LtbePgpI2QS41ewf96FcB8mCTxDAc11K6prm5QpLqgGFqC197LbcYnhUvMJ/eS
+W53lHog0aYnsSrM2pttr194QTNds/Y4HaDyeM91AubLUNIPFonUMzVJhM86FP0XK
+3pSBwwsyGPxirdpzlNbmsD+WcLz13GPQtH2nPTAtAoGAVloDEEjfj5gnZzEWTK5k
+4oYWGlwySfcfbt8EnkY+B77UVeZxWnxpVC9PhsPNI1MTNET+CRqxNZzxWo3jVuz1
+HtKSizJpaYQ6iarP4EvUdFxHBzjHX6WLahTgUq90YNaxQbXz51ARpid8sFbz1f37
+jgjgxgxbitApzno0E2Pq/Kg=
+-----END PRIVATE KEY-----
+EOF_KEY
 
-# Issue and install the certificate
-/root/.acme.sh/acme.sh --issue -d $DOMAIN --standalone -k ec-256
-/root/.acme.sh/acme.sh --installcert -d $DOMAIN --fullchainpath /etc/xray/xray.crt --keypath /etc/xray/xray.key --ecc
+cat <<'EOF_CRT' > /etc/xray/xray.crt
+-----BEGIN CERTIFICATE-----
+MIIDRTCCAi2gAwIBAgIUOvs3vdjcBtCLww52CggSlAKafDkwDQYJKoZIhvcNAQEL
+BQAwMjEQMA4GA1UEAwwHS29ielZQTjERMA8GA1UECgwIS29iZUtvYnoxCzAJBgNV
+BAYTAlBIMB4XDTIxMDcwNzA1MzQwN1oXDTMxMDcwNTA1MzQwN1owMjEQMA4GA1UE
+AwwHS29ielZQTjERMA8GA1UECgwIS29iZUtvYnoxCzAJBgNVBAYTAlBIMIIBIjAN
+BgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApZoAnZu0QdlVisHx/Bzv0/W8RHXV
+g7Ad3ySqTP7YlTLeLP1jHRibRXUZcc1G9N7vh0+rdNLC5We/IJ4I8S6SRhaRwBnV
+X/bwAgba8b+anKxuYHfJOzCfhbTE3I3kJvJFUciFu3DlsZaRmOo64p4GGejXEU64
+fzpcSBynbCyPXXXHpG2BsmVU5tcHdth1RvtOzx/wHsmO/DtvmbW48RkxUUmLd41G
+hXlJljbcalp0eDD5gvuoir1CorFduz/PYPL/AomcpwAFkSdPgKqfj1scB4v4iedN
+VnS7KXqPFZFyG9z4r8iCgt+epvsrromw9rqsC2dv/2n7qfOELqUbYFvz2wIDAQAB
+o1MwUTAdBgNVHQ4EFgQUcKFL6tckon2uS3xGrpe1Zpa68VEwHwYDVR0jBBgwFoAU
+cKFL6tckon2uS3xGrpe1Zpa68VEwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0B
+AQsFAAOCAQEAYQP0S67eoJWpAMavayS7NjK+6KMJtlmL8eot/3RKPLleOjEuCdLY
+QvrP0Tl3M5gGt+I6WO7r+HKT2PuCN8BshIob8OGAEkuQ/YKEg9QyvmSm2XbPVBaG
+RRFjvxFyeL4gtDlqb9hea62tep7+gCkeiccyp8+lmnS32rRtFa7PovmK5pUjkDOr
+dpvCQlKoCRjZ/+OfUaanzYQSDrxdTSN8RtJhCZtd45QbxEXzHTEaICXLuXL6cmv7
+tMuhgUoefS17gv1jqj/C9+6ogMVa+U7QqOvL5A7hbevHdF/k/TMn+qx4UdhrbL5Q
+enL3UGT+BhRAPiA1I5CcG29RqjCzQoaCNg==
+-----END CERTIFICATE-----
+EOF_CRT
 
-# Fallback to self-signed if acme fails (Prevents Xray crash)
-if [[ ! -f /etc/xray/xray.crt ]]; then
-    echo -e "${red}SSL Issue failed! Generating self-signed cert as fallback...${NC}"
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/xray/xray.key -out /etc/xray/xray.crt -subj "/CN=$DOMAIN"
-fi
+chmod 644 /etc/xray/xray.crt
+chmod 600 /etc/xray/xray.key
 
-# Webmin
-wget https://github.com/webmin/webmin/releases/download/2.111/webmin_2.111_all.deb
-dpkg --install webmin_2.111_all.deb || apt-get install -f -y
-rm -rf webmin_2.111_all.deb
-sed -i 's|ssl=1|ssl=0|g' /etc/webmin/miniserv.conf
-systemctl restart webmin || true
+# Copy to Stunnel
+cat /etc/xray/xray.key /etc/xray/xray.crt > /etc/stunnel/stunnel.pem
 
 # Banner
 cat <<'deekay77' > /etc/zorro-luffy
-<br><font color="#C12267">GURUZGH | VPN | SERVICE<br></font><br>
+<br><img alt="TmzxboghrK0LzxE8Qp/qP6Enw++EHeVt" style="display:none;">
+<font color="#C12267">GURUZGH | VPN | SERVICE<br></font>
+<br>
 <font color="#b3b300"> x No DDOS<br></font>
 <font color="#00cc00"> x No Torrent<br></font>
 <font color="#ff1aff"> x No Spamming<br></font>
 <font color="blue"> x No Phishing<br></font>
-<font color="#A810FF"> x No Hacking<br></font><br>
+<font color="#A810FF"> x No Hacking<br></font>
+<br>
 <font color="red">• BROUGHT TO YOU BY <br></font><font color="#00cccc">https://t.me/guruzfreenet !<br></font>
 deekay77
 
@@ -266,14 +271,12 @@ DROPBEAR_DSSKEY="/etc/dropbear/dropbear_dss_host_key"
 DROPBEAR_ECDSAKEY="/etc/dropbear/dropbear_ecdsa_host_key"
 DROPBEAR_RECEIVE_WINDOW=65536
 MyDropbear
-
 sed -i "s|PORT01|$Dropbear_Port1|g" /etc/default/dropbear
 sed -i "s|PORT02|$Dropbear_Port2|g" /etc/default/dropbear
 systemctl restart "$DROPBEAR_SERVICE"
 
 # SSLH
 cd /etc/default/
-[ -f sslh ] && cp -f sslh sslh-old || true
 cat << sslh > /etc/default/sslh
 RUN=yes
 DAEMON=/usr/sbin/sslh
@@ -286,7 +289,7 @@ systemctl daemon-reload
 systemctl enable "$SSLH_SERVICE"
 systemctl restart "$SSLH_SERVICE"
 
-# Stunnel (Internal Fallback)
+# Stunnel
 StunnelDir=$(ls /etc/default | grep stunnel | head -n1)
 cat <<'MyStunnelD' > /etc/default/$StunnelDir
 ENABLED=1
@@ -313,9 +316,6 @@ TIMEOUTclose = 0
 accept = Stunnel_Port
 connect = 127.0.0.1:MainPort
 MyStunnelC
-
-# Generating stunnel self-signed logic
-openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 -sha256 -subj "/CN=GuruzGH" -keyout /etc/stunnel/stunnel.pem -out /etc/stunnel/stunnel.pem > /dev/null 2>&1
 
 sed -i "s|Stunnel_Port|$Stunnel_Port|g" /etc/stunnel/stunnel.conf
 sed -i "s|MainPort|$MainPort|g" /etc/stunnel/stunnel.conf
@@ -386,7 +386,7 @@ systemctl daemon-reload
 systemctl enable ws-proxy
 systemctl restart ws-proxy
 
-# XRAY CORE INTEGRATION
+# === XRAY CORE INTEGRATION ===
 echo "Installing Xray Core..."
 wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
 unzip -q /tmp/xray.zip -d /tmp/xray/
@@ -394,15 +394,19 @@ mv /tmp/xray/xray /usr/local/bin/xray
 chmod +x /usr/local/bin/xray
 rm -rf /tmp/xray*
 
+touch /etc/xray/vless.txt
+touch /etc/xray/vmess.txt
+touch /etc/xray/trojan.txt
+
 cat <<EOF > /etc/xray/config.json
 {
-  "log": { "loglevel": "warning" },
+  "log": { "access": "/var/log/xray/access.log", "error": "/var/log/xray/error.log", "loglevel": "warning" },
   "inbounds": [
     {
       "port": 443,
       "protocol": "vless",
       "settings": {
-        "clients": [ { "id": "$UUID_VLESS", "flow": "xtls-rprx-direct" } ],
+        "clients": [],
         "decryption": "none",
         "fallbacks": [
           { "path": "/vmess", "dest": 10001 },
@@ -421,19 +425,19 @@ cat <<EOF > /etc/xray/config.json
     },
     {
       "listen": "127.0.0.1", "port": 10001, "protocol": "vmess",
-      "settings": { "clients": [ { "id": "$UUID_VMESS", "alterId": 0 } ] },
+      "settings": { "clients": [] },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess" } }
     },
     {
       "listen": "127.0.0.1", "port": 10002, "protocol": "trojan",
-      "settings": { "clients": [ { "password": "$TROJAN_PASS" } ] },
+      "settings": { "clients": [] },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan" } }
     },
     {
       "port": "80,8080,8880",
       "protocol": "vless",
       "settings": {
-        "clients": [ { "id": "$UUID_VLESS" } ],
+        "clients": [],
         "decryption": "none",
         "fallbacks": [
           { "path": "/vless", "dest": 10003 },
@@ -445,12 +449,12 @@ cat <<EOF > /etc/xray/config.json
     },
     {
       "listen": "127.0.0.1", "port": 10003, "protocol": "vless",
-      "settings": { "clients": [ { "id": "$UUID_VLESS" } ], "decryption": "none" },
+      "settings": { "clients": [], "decryption": "none" },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless" } }
     },
     {
       "listen": "127.0.0.1", "port": 10004, "protocol": "vmess",
-      "settings": { "clients": [ { "id": "$UUID_VMESS", "alterId": 0 } ] },
+      "settings": { "clients": [] },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess" } }
     }
   ],
@@ -461,6 +465,7 @@ cat <<EOF > /etc/xray/config.json
 }
 EOF
 
+mkdir -p /var/log/xray
 cat <<EOF > /etc/systemd/system/xray.service
 [Unit]
 Description=Xray Service
@@ -524,60 +529,25 @@ systemctl restart "$NGINX_SERVICE"
 rm -rf /etc/squid/squid.con*
 cat <<'mySquid' > /etc/squid/squid.conf
 acl server dst IP-ADDRESS/32 localhost
-acl checker src 188.93.95.137
-acl ports_ port 14 22 53 21 8081 25 8000 3128 1193 1194 440 441 442 299 550 790 443 80 8080 8880 2082 2086
+acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086
 http_port Squid_Port1
 http_port Squid_Port2
-access_log none
-cache_log /dev/null
-logfile_rotate 0
-max_filedescriptors 65535
 http_access allow server
-http_access allow checker
 http_access deny all
 http_access allow all
-forwarded_for off
-via off
-request_header_access Host allow all
-request_header_access Content-Length allow all
-request_header_access Content-Type allow all
-request_header_access All deny all
-hierarchy_stoplist cgi-bin ?
-coredump_dir /var/spool/squid
-refresh_pattern ^ftp: 1440 20% 10080
-refresh_pattern ^gopher: 1440 0% 1440
-refresh_pattern -i (/cgi-bin/|\?) 0 0% 0
-refresh_pattern . 0 20% 4320
 visible_hostname IP-ADDRESS
 mySquid
-
 sed -i "s|IP-ADDRESS|$IPADDR|g" /etc/squid/squid.conf
 sed -i "s|Squid_Port1|$Squid_Port1|g" /etc/squid/squid.conf
 sed -i "s|Squid_Port2|$Squid_Port2|g" /etc/squid/squid.conf
 systemctl restart "$SQUID_SERVICE"
 
-# Service Checker
-cat <<'ServiceChecker' > /etc/deekayvpn/service_checker.sh
-#!/bin/bash
-# Checks health of all running protocols.
-ServiceChecker
-chmod 755 /etc/deekayvpn/service_checker.sh
-
-# Webmin Configuration
-sed -i '$ i\deekay: acl adsl-client ajaxterm apache at backup-config bacula-backup bandwidth bind8 burner change-user cluster-copy cluster-cron cluster-passwd cluster-shell cluster-software cluster-useradmin cluster-usermin cluster-webmin cpan cron custom dfsadmin dhcpd dovecot exim exports fail2ban fdisk fetchmail file filemin filter firewall firewalld fsdump grub heartbeat htaccess-htpasswd idmapd inetd init inittab ipfilter ipfw ipsec iscsi-client iscsi-server iscsi-target iscsi-tgtd jabber krb5 ldap-client ldap-server ldap-useradmin logrotate lpadmin lvm mailboxes mailcap man mon mount mysql net nis openslp package-updates pam pap passwd phpini postfix postgresql ppp-client pptp-client pptp-server proc procmail proftpd qmailadmin quota raid samba sarg sendmail servers shell shorewall shorewall6 smart-status smf software spam squid sshd status stunnel syslog-ng syslog system-status tcpwrappers telnet time tunnel updown useradmin usermin vgetty webalizer webmin webmincron webminlog wuftpd xinetd' /etc/webmin/webmin.acl
-sed -i '$ i\deekay:0' /etc/webmin/miniserv.users
-/usr/share/webmin/changepass.pl /etc/webmin deekay 20037
-
 # System Tuning & Standard BBR
 cat <<'SYSCTL' > /etc/sysctl.d/99-freenet-tuning.conf
 fs.file-max = 1048576
 net.core.somaxconn = 65535
-net.core.netdev_max_backlog = 16384
-net.ipv4.ip_local_port_range = 1024 65000
 net.ipv4.tcp_max_syn_backlog = 8192
-net.ipv4.tcp_fin_timeout = 15
 net.ipv4.tcp_tw_reuse = 1
-net.ipv4.tcp_keepalive_time = 600
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 SYSCTL
@@ -629,6 +599,7 @@ systemctl restart server-sldns
 
 # UDP hysteria
 wget -N --no-check-certificate -q -O ~/install_server.sh https://raw.githubusercontent.com/RepositoriesDexter/Hysteria/main/install_server.sh; chmod +x ~/install_server.sh; ./install_server.sh --version v1.3.5
+rm -f /etc/hysteria/config.json
 mkdir -p /etc/hysteria
 HYST_PORT="${UDP_PORT##*:}"
 
@@ -642,16 +613,123 @@ cat > /etc/hysteria/config.json <<EOF
   "down_mbps": 50,
   "disable_udp": false,
   "obfs": "$OBFS",
-  "auth": { "mode": "passwords", "config": ["$PASSWORD"] }
+  "auth": {
+    "mode": "passwords",
+    "config": ["$PASSWORD"]
+  }
 }
 EOF
-openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 -sha256 -subj "/CN=Hysteria" -keyout /etc/hysteria/hysteria.key -out /etc/hysteria/hysteria.crt > /dev/null 2>&1
 
-IFACE="$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)"
-iptables -C INPUT -p udp --dport "$HYST_PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport "$HYST_PORT" -j ACCEPT
-iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || \
-iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT
+cat << EOF > /etc/hysteria/hysteria.crt
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number:
+            40:26:da:91:18:2b:77:9c:85:6a:0c:bb:ca:90:53:fe
+        Signature Algorithm: sha256WithRSAEncryption
+        Issuer: CN=KobZ
+        Validity
+            Not Before: Jul 22 22:23:55 2020 GMT
+            Not After : Jul 20 22:23:55 2030 GMT
+        Subject: CN=server
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+                RSA Public-Key: (1024 bit)
+                Modulus:
+                    00:ce:35:23:d8:5d:9f:b6:9b:cb:6a:89:e1:90:af:
+                    42:df:5f:f8:bd:ad:a7:78:9a:ca:20:f0:3d:5b:d6:
+                    c9:ef:4c:4a:99:96:c3:38:fd:59:b4:d7:65:ed:d4:
+                    a7:fa:ab:03:e2:be:88:2f:ca:fc:90:dd:b0:b7:bc:
+                    23:cb:83:ac:36:e2:01:57:69:64:b8:e1:9e:51:f0:
+                    a6:9d:13:d9:92:6b:4d:04:a6:10:64:a3:3f:6b:ff:
+                    fe:32:ac:91:63:c2:71:24:be:9e:76:4f:87:cc:3a:
+                    03:a1:9e:48:3f:11:92:33:3b:19:16:9c:d0:5d:16:
+                    ee:c1:42:67:99:47:66:67:67
+                Exponent: 65537 (0x10001)
+        X509v3 extensions:
+            X509v3 Basic Constraints: 
+                CA:FALSE
+            X509v3 Subject Key Identifier: 
+                6B:08:C0:64:10:71:A8:32:7F:0B:FE:1E:98:1F:BD:72:74:0F:C8:66
+            X509v3 Authority Key Identifier: 
+                keyid:64:49:32:6F:FE:66:62:F1:57:4D:BB:91:A8:5D:BD:26:3E:51:A4:D2
+                DirName:/CN=KobZ
+                serial:01:A4:01:02:93:12:D9:D6:01:A9:83:DC:03:73:DA:ED:C8:E3:C3:B7
+            X509v3 Extended Key Usage: 
+                TLS Web Server Authentication
+            X509v3 Key Usage: 
+                Digital Signature, Key Encipherment
+            X509v3 Subject Alternative Name: 
+                DNS:server
+    Signature Algorithm: sha256WithRSAEncryption
+         a1:3e:ac:83:0b:e5:5d:ca:36:b7:d0:ab:d0:d9:73:66:d1:62:
+         88:ce:3d:47:9e:08:0b:a0:5b:51:13:fc:7e:d7:6e:17:0e:bd:
+         f5:d9:a9:d9:06:78:52:88:5a:e5:df:d3:32:22:4a:4b:08:6f:
+         b1:22:80:4f:19:d1:5f:9d:b6:5a:17:f7:ad:70:a9:04:00:ff:
+         fe:84:aa:e1:cb:0e:74:c0:1a:75:0b:3e:98:90:1d:22:ba:a4:
+         7a:26:65:7d:d1:3b:5c:45:a1:77:22:ed:b6:6b:18:a3:c4:ee:
+         3e:06:bb:0b:ec:12:ac:16:a5:50:b3:ed:46:43:87:72:fd:75:
+         8c:38
+-----BEGIN CERTIFICATE-----
+MIICVDCCAb2gAwIBAgIQQCbakRgrd5yFagy7ypBT/jANBgkqhkiG9w0BAQsFADAP
+MQ0wCwYDVQQDDARLb2JaMB4XDTIwMDcyMjIyMjM1NVoXDTMwMDcyMDIyMjM1NVow
+ETEPMA0GA1UEAwwGc2VydmVyMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDO
+NSPYXZ+2m8tqieGQr0LfX/i9rad4msog8D1b1snvTEqZlsM4/Vm012Xt1Kf6qwPi
+vogvyvyQ3bC3vCPLg6w24gFXaWS44Z5R8KadE9mSa00EphBkoz9r//4yrJFjwnEk
+vp52T4fMOgOhnkg/EZIzOxkWnNBdFu7BQmeZR2ZnZwIDAQABo4GuMIGrMAkGA1Ud
+EwQCMAAwHQYDVR0OBBYEFGsIwGQQcagyfwv+HpgfvXJ0D8hmMEoGA1UdIwRDMEGA
+FGRJMm/+ZmLxV027kahdvSY+UaTSoROkETAPMQ0wCwYDVQQDDARLb2JaghQBpAEC
+kxLZ1gGpg9wDc9rtyOPDtzATBgNVHSUEDDAKBggrBgEFBQcDATALBgNVHQ8EBAMC
+BaAwEQYDVR0RBAowCIIGc2VydmVyMA0GCSqGSIb3DQEBCwUAA4GBAKE+rIML5V3K
+NrfQq9DZc2bRYojOPUeeCAugW1ET/H7XbhcOvfXZqdkGeFKIWuXf0zIiSksIb7Ei
+gE8Z0V+dtloX961wqQQA//6EquHLDnTAGnULPpiQHSK6pHomZX3RO1xFoXci7bZr
+GKPE7j4GuwvsEqwWpVCz7UZDh3L9dYw4
+-----END CERTIFICATE-----
+EOF
 
+cat << EOF > /etc/hysteria/hysteria.key
+-----BEGIN PRIVATE KEY-----
+MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAM41I9hdn7aby2qJ
+4ZCvQt9f+L2tp3iayiDwPVvWye9MSpmWwzj9WbTXZe3Up/qrA+K+iC/K/JDdsLe8
+I8uDrDbiAVdpZLjhnlHwpp0T2ZJrTQSmEGSjP2v//jKskWPCcSS+nnZPh8w6A6Ge
+SD8RkjM7GRac0F0W7sFCZ5lHZmdnAgMBAAECgYAFNrC+UresDUpaWjwaxWOidDG8
+0fwu/3Lm3Ewg21BlvX8RXQ94jGdNPDj2h27r1pEVlY2p767tFr3WF2qsRZsACJpI
+qO1BaSbmhek6H++Fw3M4Y/YY+JD+t1eEBjJMa+DR5i8Vx3AE8XOdTXmkl/xK4jaB
+EmLYA7POyK+xaDCeEQJBAPJadiYd3k9OeOaOMIX+StCs9OIMniRz+090AJZK4CMd
+jiOJv0mbRy945D/TkcqoFhhScrke9qhgZbgFj11VbDkCQQDZ0aKBPiZdvDMjx8WE
+y7jaltEDINTCxzmjEBZSeqNr14/2PG0X4GkBL6AAOLjEYgXiIvwfpoYE6IIWl3re
+ebCfAkAHxPimrixzVGux0HsjwIw7dl//YzIqrwEugeSG7O2Ukpz87KySOoUks3Z1
+yV2SJqNWskX1Q1Xa/gQkyyDWeCeZAkAbyDBI+ctc8082hhl8WZunTcs08fARM+X3
+FWszc+76J1F2X7iubfIWs6Ndw95VNgd4E2xDATNg1uMYzJNgYvcTAkBoE8o3rKkp
+em2n0WtGh6uXI9IC29tTQGr3jtxLckN/l9KsJ4gabbeKNoes74zdena1tRdfGqUG
+JQbf7qSE3mg2
+-----END PRIVATE KEY-----
+EOF
+
+chmod 755 /etc/hysteria/config.json
+chmod 755 /etc/hysteria/hysteria.crt
+chmod 755 /etc/hysteria/hysteria.key
+
+cat > /etc/systemd/system/hysteria-nat.service <<EOF
+[Unit]
+Description=Restore Hysteria UDP NAT rule
+After=network-online.target
+Wants=network-online.target
+Before=hysteria-server.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT)'
+ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport $HYST_PORT -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport $HYST_PORT -j ACCEPT'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable hysteria-nat.service
+systemctl start hysteria-nat.service
 systemctl enable hysteria-server.service
 systemctl restart hysteria-server.service
 
@@ -678,15 +756,37 @@ systemctl enable badvpn
 systemctl start badvpn
 
 # VNSTAT Init
+IFACE="$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)"
 vnstat -u -i "$IFACE" 2>/dev/null || true
 systemctl enable vnstat
 systemctl restart vnstat
 
+# USER EXPIRY CRONJOB (Auto-Delete Expired)
+cat <<'EOF_EXP' > /usr/local/bin/exp-check
+#!/bin/bash
+now=$(date +%Y-%m-%d)
+for proto in vless vmess trojan; do
+  if [ -f "/etc/xray/${proto}.txt" ]; then
+    data=( $(cat /etc/xray/${proto}.txt | awk '{print $1}') )
+    for user in "${data[@]}"; do
+      exp=$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $3}')
+      if [[ "$now" > "$exp" ]]; then
+        # Globally strip user from all inbound configurations safely
+        jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+        sed -i "/^$user /d" /etc/xray/${proto}.txt
+      fi
+    done
+  fi
+done
+systemctl restart xray
+EOF_EXP
+chmod +x /usr/local/bin/exp-check
+echo "0 0 * * * root /usr/local/bin/exp-check >/dev/null 2>&1" > /etc/cron.d/xray-expiry
+
 # MENU CREATION
-cd /usr/local/bin
+mkdir -p /usr/local/bin
 cat > /usr/local/bin/menu <<'EOF_MENU'
 #!/bin/bash
-
 RED='\033[1;31m'
 GREEN='\033[1;32m'
 YELLOW='\033[1;33m'
@@ -695,10 +795,10 @@ CYAN='\033[1;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 BOLD='\033[1m'
+DOMAIN="DOMAIN_PLACEHOLDER"
 
 server_ip() { curl -4 -s ipv4.icanhazip.com; }
 cpu_count() { nproc; }
-mem_stats() { free -h | awk '/Mem:/ {print $2 "|" $7 "|" $3}'; }
 ram_percent() { free | awk '/Mem:/ { printf "%.1f%%", ($3/$2)*100 }'; }
 cpu_percent() { top -bn1 | awk -F',' '/Cpu\(s\)/ { gsub("%us","",$1); gsub(" ","",$1); split($1,a,":"); printf "%.1f%%", a[2]+0 }'; }
 buffer_mem() { free -m | awk '/Mem:/ {print $6 "M"}'; }
@@ -706,7 +806,7 @@ vnstat_rx() { vnstat -i $(ip route | awk '/default/ {print $5}') --oneline 2>/de
 
 server_status() {
   local ok=0
-  for s in ssh dropbear stunnel4 squid xray server-sldns hysteria-server ws-proxy; do
+  for s in ssh dropbear stunnel4 squid xray ws-proxy; do
     systemctl is-active --quiet "$s" 2>/dev/null && ok=$((ok+1))
   done
   [ "$ok" -ge 4 ] && echo -e "${GREEN}ONLINE${NC}" || echo -e "${RED}ISSUES DETECTED${NC}"
@@ -714,68 +814,187 @@ server_status() {
 
 pause_return() { echo; read -rp "Press ENTER to return... " _; }
 
-check_netflix() {
+# --- CORE XRAY MANAGEMENT FUNCTIONS ---
+
+add_xray() {
   clear
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e "                   ${BOLD}NETFLIX REGION CHECKER${NC}"
+  echo -e "                   ${BOLD}CREATE XRAY ACCOUNT${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  if [ ! -f /usr/local/bin/nf ]; then
-    echo -e "Downloading Netflix Checker..."
-    wget -qO /usr/local/bin/nf https://github.com/sjlleo/netflix-verify/releases/download/v3.1.0/nf_linux_amd64
-    chmod +x /usr/local/bin/nf
-  fi
-  /usr/local/bin/nf
-  pause_return
-}
-
-update_xray() {
-  clear
-  echo -e "${YELLOW}Updating Xray Core to latest version...${NC}"
-  systemctl stop xray
-  wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
-  unzip -q -o /tmp/xray.zip -d /tmp/xray/
-  mv -f /tmp/xray/xray /usr/local/bin/xray
-  chmod +x /usr/local/bin/xray
-  rm -rf /tmp/xray*
-  systemctl start xray
-  echo -e "${GREEN}✔ Xray Core successfully updated!${NC}"
-  /usr/local/bin/xray version | head -n 1
-  pause_return
-}
-
-generate_xray_configs() {
-  clear
-  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e "                   ${BOLD}XRAY CONFIGURATIONS${NC}"
-  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  DOMAIN=$(grep -oP '(?<="certificateFile": "/etc/xray/).*(?=\.crt")' /etc/xray/config.json | head -1)
-  UUID_V=$(grep -A 5 '"protocol": "vless"' /etc/xray/config.json | grep -oP '(?<="id": ")[^"]*' | head -1)
-  UUID_M=$(grep -A 5 '"protocol": "vmess"' /etc/xray/config.json | grep -oP '(?<="id": ")[^"]*' | head -1)
-  PASS_T=$(grep -A 5 '"protocol": "trojan"' /etc/xray/config.json | grep -oP '(?<="password": ")[^"]*' | head -1)
-
-  echo -e "${YELLOW}--- TLS PORTS (443) ---${NC}"
-  echo -e "${GREEN}VLESS TLS (XTLS Direct):${NC}"
-  echo -e "vless://${UUID_V}@${DOMAIN}:443?encryption=none&security=xtls&type=tcp&flow=xtls-rprx-direct&sni=${DOMAIN}#VLESS-TLS"
-  echo ""
-  echo -e "${GREEN}VMESS TLS (WebSocket):${NC}"
-  VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"VMESS-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${UUID_M}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
-  echo -e "vmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
-  echo ""
-  echo -e "${GREEN}Trojan TLS (WebSocket):${NC}"
-  echo -e "trojan://${PASS_T}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Ftrojan#Trojan-TLS"
-  echo ""
+  echo -e " [1] VLESS (TLS & NTLS)"
+  echo -e " [2] VMESS (TLS & NTLS)"
+  echo -e " [3] TROJAN (TLS)"
+  read -rp " Select Protocol: " prot
+  read -rp " Username: " user
   
-  echo -e "${YELLOW}--- NON-TLS PORTS (80, 8080, 8880) ---${NC}"
-  echo -e "${GREEN}VLESS Non-TLS (WebSocket):${NC}"
-  echo -e "vless://${UUID_V}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#VLESS-NTLS"
-  echo ""
-  echo -e "${GREEN}VMESS Non-TLS (WebSocket):${NC}"
-  VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"VMESS-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${UUID_M}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
-  echo -e "vmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
-  echo ""
+  # Check if user exists
+  if grep -qw "^$user" /etc/xray/vless.txt /etc/xray/vmess.txt /etc/xray/trojan.txt 2>/dev/null; then
+    echo -e "${RED}Username already exists!${NC}"; pause_return; return
+  fi
+
+  read -rp " Validity (Days): " masa
+  exp=$(date -d "+${masa} days" +"%Y-%m-%d")
+  uuid=$(cat /proc/sys/kernel/random/uuid)
+  
+  if [ "$prot" == "1" ]; then
+    jq ".inbounds[0].settings.clients += [{\"id\": \"$uuid\", \"flow\": \"xtls-rprx-direct\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+    jq ".inbounds[3].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+    jq ".inbounds[4].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+    echo "$user $uuid $exp" >> /etc/xray/vless.txt
+    
+    clear
+    echo -e "${GREEN}✔ VLESS Account Created!${NC}"
+    echo -e "Username : $user\nExpiry   : $exp"
+    echo -e "\n${YELLOW}TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?encryption=none&security=xtls&type=tcp&flow=xtls-rprx-direct&sni=${DOMAIN}&host=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvless://${uuid}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#${user}"
+  fi
+  
+  if [ "$prot" == "2" ]; then
+    jq ".inbounds[1].settings.clients += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+    jq ".inbounds[5].settings.clients += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+    echo "$user $uuid $exp" >> /etc/xray/vmess.txt
+    clear
+    echo -e "${GREEN}✔ VMESS Account Created!${NC}\nUsername: $user\nExpiry: $exp"
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\",\"alpn\":\"\"}"
+    echo -e "\n${YELLOW}TLS (443):${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
+    VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
+    echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
+  fi
+  
+  if [ "$prot" == "3" ]; then
+    pass="Guruz${uuid:0:6}"
+    jq ".inbounds[2].settings.clients += [{\"password\": \"$pass\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+    echo "$user $pass $exp" >> /etc/xray/trojan.txt
+    clear
+    echo -e "${GREEN}✔ TROJAN Account Created!${NC}\nUsername: $user\nPassword: $pass\nExpiry: $exp"
+    echo -e "\n${YELLOW}TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Ftrojan&allowInsecure=1#${user}"
+  fi
+  
+  systemctl restart xray
   pause_return
 }
 
+del_xray() {
+  clear
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}DELETE XRAY ACCOUNT${NC}"
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+  read -rp " Username to delete: " user
+  
+  if ! grep -qw "^$user" /etc/xray/*.txt 2>/dev/null; then
+    echo -e "${YELLOW}User not found.${NC}"; pause_return; return
+  fi
+
+  # Globally wipe user from all config JSON arrays safely
+  jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+  sed -i "/^$user /d" /etc/xray/vless.txt /etc/xray/vmess.txt /etc/xray/trojan.txt 2>/dev/null
+  systemctl restart xray
+  echo -e "\n${GREEN}✔ User $user deleted successfully.${NC}"
+  pause_return
+}
+
+renew_xray() {
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}RENEW XRAY ACCOUNT${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  read -rp " Username to renew: " user
+  
+  target_file=""
+  for proto in vless vmess trojan; do
+    if grep -qw "^$user" "/etc/xray/${proto}.txt"; then target_file="/etc/xray/${proto}.txt"; break; fi
+  done
+
+  if [ -z "$target_file" ]; then echo -e "${RED}User not found.${NC}"; pause_return; return; fi
+
+  read -rp " Add Validity (Days): " days
+  current_exp=$(grep -w "^$user" "$target_file" | awk '{print $3}')
+  new_exp=$(date -d "$current_exp + $days days" +"%Y-%m-%d")
+  sed -i "s/^$user .* $current_exp/$(grep -w "^$user" "$target_file" | awk '{print $1 " " $2}') $new_exp/" "$target_file"
+  
+  echo -e "\n${GREEN}✔ User $user renewed successfully.${NC}"
+  echo -e "Old Expiry: $current_exp\nNew Expiry: $new_exp"
+  pause_return
+}
+
+show_xray() {
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}SHOW XRAY CONFIG LINKS${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  read -rp " Username to view: " user
+  
+  if grep -qw "^$user" /etc/xray/vless.txt; then
+    uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
+    echo -e "${YELLOW}VLESS TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?encryption=none&security=xtls&type=tcp&flow=xtls-rprx-direct&sni=${DOMAIN}&host=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "\n${YELLOW}VLESS NTLS (80):${NC}\nvless://${uuid}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#${user}"
+  elif grep -qw "^$user" /etc/xray/vmess.txt; then
+    uuid=$(grep -w "^$user" /etc/xray/vmess.txt | awk '{print $2}')
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\",\"alpn\":\"\"}"
+    echo -e "${YELLOW}VMESS TLS (443):${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
+    VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
+    echo -e "\n${YELLOW}VMESS NTLS (80):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
+  elif grep -qw "^$user" /etc/xray/trojan.txt; then
+    pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
+    echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Ftrojan&allowInsecure=1#${user}"
+  else
+    echo -e "${RED}User not found.${NC}"
+  fi
+  pause_return
+}
+
+cek_login() {
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}ACTIVE XRAY LOGINS${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "${YELLOW}Currently active IPs matching specific Xray users:${NC}"
+  grep -w "accepted" /var/log/xray/access.log | grep "email:" | tail -n 100 | awk '{print $8 " -> " $3}' | sort | uniq -c | sort -nr
+  pause_return
+}
+
+set_autoreboot() {
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}AUTO REBOOT SCHEDULER${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e " [1] Reboot at 00:00 Daily"
+  echo -e " [2] Reboot at 03:00 Daily"
+  echo -e " [3] Reboot at 06:00 Daily"
+  echo -e " [4] Disable Auto Reboot"
+  read -rp " Select Option: " arb
+  case "$arb" in
+    1) echo "0 0 * * * root /sbin/reboot" > /etc/cron.d/auto-reboot; echo -e "${GREEN}Enabled for 00:00${NC}" ;;
+    2) echo "0 3 * * * root /sbin/reboot" > /etc/cron.d/auto-reboot; echo -e "${GREEN}Enabled for 03:00${NC}" ;;
+    3) echo "0 6 * * * root /sbin/reboot" > /etc/cron.d/auto-reboot; echo -e "${GREEN}Enabled for 06:00${NC}" ;;
+    4) rm -f /etc/cron.d/auto-reboot; echo -e "${YELLOW}Auto Reboot Disabled.${NC}" ;;
+  esac
+  pause_return
+}
+
+backup_server() {
+  clear
+  out="/root/VPS_Backup_$(date +%Y%m%d).tar.gz"
+  tar -czf "$out" /etc/xray/ /etc/ssh/ /etc/stunnel/ /etc/socksproxy/ /etc/dropbear/ /etc/squid/ /etc/slowdns/
+  echo -e "${GREEN}✔ Backup saved to $out${NC}"
+  pause_return
+}
+
+restore_server() {
+  clear
+  echo -e "${RED}WARNING: Restoring will overwrite current configurations!${NC}"
+  read -rp "Enter full path of backup file (e.g. /root/VPS_Backup_xxx.tar.gz): " file
+  if [ -f "$file" ]; then
+    tar -xzf "$file" -C /
+    systemctl restart xray ssh dropbear stunnel4 ws-proxy
+    echo -e "${GREEN}✔ Restore Complete! Services Restarted.${NC}"
+  else
+    echo -e "${RED}File not found!${NC}"
+  fi
+  pause_return
+}
+
+# --- MENU DASHBOARD ---
 draw_header() {
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
   echo -e "${BLUE}       >>>>>  🐉  ${YELLOW}${BOLD}Guruz GH${NC}${BLUE}  ✸  ${YELLOW}${BOLD}Plus${NC}${BLUE}  🐉  <<<<<${NC}"
@@ -789,7 +1008,7 @@ draw_header() {
   echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}80, 8080, 8880${NC}      ${WHITE}• Squid:${NC} ${GREEN}8000${NC}"
   echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}2082, 2086, 25${NC}      ${WHITE}• BadVPN:${NC} ${GREEN}7300${NC}"
   echo -e "  ${WHITE}• XRAY TLS:${NC} ${GREEN}443${NC}                  ${WHITE}• XRAY NTLS:${NC} ${GREEN}80, 8080, 8880${NC}"
-  echo -e "  ${WHITE}• SlowDNS:${NC} ${GREEN}5300${NC}                  ${WHITE}• HysteriaUDP:${NC} ${GREEN}20000-50000${NC}"
+  echo -e "  ${WHITE}• SlowDNS:${NC} ${GREEN}5300${NC}                 ${WHITE}• HysteriaUDP:${NC} ${GREEN}20000-50000${NC}"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(ram_percent)${NC}   ${WHITE}CPU Used:${NC} ${YELLOW}$(cpu_percent)${NC}   ${WHITE}Buffer:${NC} ${YELLOW}$(buffer_mem)${NC}"
   echo -e "  ${WHITE}Bandwidth:${NC} ${YELLOW}$(vnstat_rx)${NC}"
@@ -800,47 +1019,53 @@ while true; do
   clear
   draw_header
   echo
-  echo -e "  [${YELLOW}01${NC}] Account Management (Create, Extend, Delete)"
-  echo -e "  [${YELLOW}02${NC}] Monitor Active Connections"
-  echo -e "  [${YELLOW}03${NC}] Service Controls (Restart Protocols)"
-  echo -e "  [${YELLOW}04${NC}] Advanced Settings & Backups"
-  echo -e "  [${YELLOW}05${NC}] Reboot Server"
-  echo -e "  [${YELLOW}06${NC}] Xray & V2ray Management"
-  echo -e "  [${YELLOW}07${NC}] Check Netflix Region"
+  echo -e "  [${YELLOW}01${NC}] Add Xray Account"
+  echo -e "  [${YELLOW}02${NC}] Delete Xray Account"
+  echo -e "  [${YELLOW}03${NC}] Renew Xray Account (Extend Expiry)"
+  echo -e "  [${YELLOW}04${NC}] Show Config Links for Existing User"
+  echo -e "  [${YELLOW}05${NC}] Check Active Xray Logins"
+  echo -e "  [${YELLOW}06${NC}] Force Delete All Expired Users Now"
+  echo -e "  [${YELLOW}07${NC}] System & Kernel (BBR, Auto-Reboot, Netflix)"
+  echo -e "  [${YELLOW}08${NC}] Backup & Restore"
+  echo -e "  [${YELLOW}09${NC}] Update Xray Core"
   echo -e "  [${RED}00${NC}] Exit"
   echo
   read -rp "  ► Select an option: " opt
   case "$opt" in
-    1|01) echo -e "${YELLOW}Feature temporarily bridged to terminal. Use standard useradd.${NC}"; sleep 2 ;;
-    2|02) echo -e "${YELLOW}Monitor bridged.${NC}"; sleep 2 ;;
-    3|03) systemctl restart ssh dropbear xray ws-proxy; echo "Services Restarted"; sleep 2 ;;
-    4|04) echo -e "${YELLOW}Advanced bridged.${NC}"; sleep 2 ;;
-    5|05) clear; read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
-    6|06)
-      while true; do
-        clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}XRAY MANAGEMENT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
-        echo -e "  [${YELLOW}1${NC}] Generate Connection Links\n  [${YELLOW}2${NC}] Update Xray Core\n  [${YELLOW}3${NC}] Restart Xray\n  [${YELLOW}0${NC}] Back\n"
-        read -rp "  ► Option: " sub_opt
-        case "$sub_opt" in 1) generate_xray_configs;; 2) update_xray;; 3) systemctl restart xray; echo "Restarted."; sleep 1;; 0) break;; esac
-      done ;;
-    7|07) check_netflix ;;
+    1|01) add_xray ;;
+    2|02) del_xray ;;
+    3|03) renew_xray ;;
+    4|04) show_xray ;;
+    5|05) cek_login ;;
+    6|06) /usr/local/bin/exp-check; echo "Expired users wiped."; pause_return ;;
+    7|07) 
+      clear; echo -e "  [1] Install BBR\n  [2] Set Auto-Reboot\n  [3] Check Netflix\n  [0] Back"
+      read -rp " Select: " subopt
+      case "$subopt" in 
+        1) wget -N --no-check-certificate "https://raw.githubusercontent.com/chiakge/Linux-NetSpeed/master/tcp.sh" && chmod +x tcp.sh && ./tcp.sh; pause_return;; 
+        2) set_autoreboot;; 
+        3) [ ! -f /usr/local/bin/nf ] && wget -qO /usr/local/bin/nf https://github.com/sjlleo/netflix-verify/releases/download/v3.1.0/nf_linux_amd64 && chmod +x /usr/local/bin/nf; /usr/local/bin/nf; pause_return;; 
+      esac ;;
+    8|08)
+      clear; echo -e "  [1] Backup System Configs\n  [2] Restore From Backup\n  [0] Back"
+      read -rp " Select: " subopt
+      case "$subopt" in 1) backup_server;; 2) restore_server;; esac ;;
+    9|09)
+      systemctl stop xray
+      wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
+      unzip -q -o /tmp/xray.zip -d /tmp/xray/ && mv -f /tmp/xray/xray /usr/local/bin/xray
+      systemctl start xray; echo -e "${GREEN}✔ Xray Updated!${NC}"; pause_return ;;
     0|00) clear; exit 0 ;;
     *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
   esac
 done
 EOF_MENU
+sed -i "s|DOMAIN_PLACEHOLDER|$DOMAIN|g" /usr/local/bin/menu
 chmod +x /usr/local/bin/menu
 cp /usr/local/bin/menu /usr/bin/menu
-cp /usr/local/bin/menu /usr/bin/Menu
-
-chown -R www-data:www-data /home/vps/public_html
 
 clear
-echo ""
-echo " INSTALLATION FINISHED! System tuned with BBR & Xray Multiplexing. "
-echo " Please reboot to apply all custom limits and kernel changes."
-history -c;
-rm /root/full.sh 2>/dev/null || true
-echo " Server will reboot in 10 seconds! "
-sleep 10
+echo " INSTALLATION FINISHED! Run 'menu' to access the dashboard. "
+echo " Server will reboot in 5 seconds! "
+sleep 5
 reboot
