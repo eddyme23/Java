@@ -181,7 +181,12 @@ systemctl stop nginx
 # === CERTIFICATE GENERATION ===
 echo "Generating SSL Certificates for $DOMAIN..."
 curl https://get.acme.sh | sh -s email=admin@$DOMAIN
+
+# Force Let's Encrypt to avoid the ZeroSSL EAB hang
+/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 /root/.acme.sh/acme.sh --register-account -m admin@$DOMAIN
+
+# Issue and install the certificate
 /root/.acme.sh/acme.sh --issue -d $DOMAIN --standalone -k ec-256
 /root/.acme.sh/acme.sh --installcert -d $DOMAIN --fullchainpath /etc/xray/xray.crt --keypath /etc/xray/xray.key --ecc
 
