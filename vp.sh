@@ -1105,6 +1105,7 @@ deekayz
 sed -i "s|MyTimeZone|$MyVPS_Time|g" /etc/deekaystartup
 sed -i "s|DNS1|$Dns_1|g" /etc/deekaystartup
 sed -i "s|DNS2|$Dns_2|g" /etc/deekaystartup
+#rm -rf /etc/sysctl.d/99*
 
  # Setting our startup script to run every machine boots 
 cat <<'deekayx' > /etc/systemd/system/deekaystartup.service
@@ -1339,22 +1340,39 @@ online_users() {
 
   declare -A ssh_count dropbear_count total_count
   
-  # Parse SSH connections strictly by Process Owner
+  # 1. Parse OpenSSH (sshd) Users
   while IFS= read -r user; do
-    # Ensure it's a real user, not root
     if [ -n "$user" ] && [ "$user" != "root" ] && id "$user" >/dev/null 2>&1; then
-      ssh_count["$user"]=$(( ${ssh_count["$user"]:-0} + 1 ))
-      total_count["$user"]=$(( ${total_count["$user"]:-0} + 1 ))
+      # Separate the math to avoid Bash syntax errors
+      s_val=${ssh_count["$user"]:-0}
+      ssh_count["$user"]=$((s_val + 1))
+      
+      t_val=${total_count["$user"]:-0}
+      total_count["$user"]=$((t_val + 1))
     fi
-  done < <(ps -eo user,comm 2>/dev/null | awk '$2=="sshd" {print $1}')
+  done < <(ps -eo args 2>/dev/null | grep "^sshd: " | grep -v "listener" | awk '{print $2}' | cut -d'@' -f1)
 
-  # Parse Dropbear connections strictly by Process Owner
-  while IFS= read -r user; do
-    if [ -n "$user" ] && [ "$user" != "root" ] && id "$user" >/dev/null 2>&1; then
-      dropbear_count["$user"]=$(( ${dropbear_count["$user"]:-0} + 1 ))
-      total_count["$user"]=$(( ${total_count["$user"]:-0} + 1 ))
+  # 2. Parse Dropbear & WebSocket Users
+  active_dropbear_pids=$(ps -ef | grep "[d]ropbear" | awk '{print $2}')
+  
+  for pid in $active_dropbear_pids; do
+    # Try reading from auth.log first
+    user=$(grep "dropbear\[$pid\]" /var/log/auth.log 2>/dev/null | grep -i "succeeded" | tail -1 | awk -F"'" '{print $2}')
+    
+    # Fallback to journalctl if auth.log rotated
+    if [ -z "$user" ]; then
+      user=$(journalctl -u dropbear --no-pager 2>/dev/null | grep "dropbear\[$pid\]" | grep -i "succeeded" | tail -1 | awk -F"'" '{print $2}')
     fi
-  done < <(ps -eo user,comm 2>/dev/null | awk '$2=="dropbear" {print $1}')
+    
+    if [ -n "$user" ] && [ "$user" != "root" ] && id "$user" >/dev/null 2>&1; then
+      # Separate the math to avoid Bash syntax errors
+      d_val=${dropbear_count["$user"]:-0}
+      dropbear_count["$user"]=$((d_val + 1))
+      
+      t_val=${total_count["$user"]:-0}
+      total_count["$user"]=$((t_val + 1))
+    fi
+  done
 
   if [ "${#total_count[@]}" -eq 0 ]; then
     echo -e "${YELLOW}  No authenticated users are currently online.${NC}\n"
@@ -1366,7 +1384,12 @@ online_users() {
   echo -e "${CYAN}  ----------------------------------------------------------${NC}"
 
   for user in "${!total_count[@]}"; do
-    printf "  %-20s %-10s %-12s %-8s\n" "$user" "${ssh_count[\"$user\"]:-0}" "${dropbear_count[\"$user\"]:-0}" "${total_count[\"$user\"]:-0}"
+    # Extract values cleanly
+    s_count=${ssh_count["$user"]:-0}
+    d_count=${dropbear_count["$user"]:-0}
+    t_count=${total_count["$user"]:-0}
+    
+    printf "  %-20s %-10s %-12s %-8s\n" "$user" "$s_count" "$d_count" "$t_count"
   done | sort
 
   echo
