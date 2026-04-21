@@ -131,6 +131,10 @@ if [ "${ID}" != "ubuntu" ] && [ "${ID}" != "debian" ]; then
   exit 1
 fi
 
+# Stop and Disable systemd-resolved (Frees up Port 53 for SlowDNS)
+systemctl stop systemd-resolved 2>/dev/null
+systemctl disable systemd-resolved 2>/dev/null
+
 SSH_SERVICE="ssh"
 DROPBEAR_SERVICE="dropbear"
 STUNNEL_SERVICE="stunnel4"
@@ -141,7 +145,6 @@ SFTP_SUBSYSTEM="internal-sftp"
 
 mkdir -p /etc/dropbear /etc/stunnel /etc/nginx/conf.d /etc/deekayvpn /var/run/sslh /etc/xray
 ssh-keygen -A >/dev/null 2>&1 || true
-touch /etc/resolv.conf
 
 command -v ss >/dev/null 2>&1 || apt-get install -y iproute2
 command -v netfilter-persistent >/dev/null 2>&1 || apt-get install -y netfilter-persistent iptables-persistent
@@ -661,15 +664,15 @@ END
 wget -q -O /etc/slowdns/sldns-server "https://raw.githubusercontent.com/fisabiliyusri/SLDNS/main/slowdns/sldns-server"
 chmod +x /etc/slowdns/server.key /etc/slowdns/server.pub /etc/slowdns/sldns-server
 
-iptables -C INPUT -p udp --dport 5300 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 5300 -j ACCEPT
-iptables -t nat -C PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null || iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300
+# Iptables Rule for SlowDNS server directly on port 53
+iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53 -j ACCEPT
 
 cat > /etc/systemd/system/server-sldns.service << END
 [Unit]
 Description=Server SlowDNS
 After=network.target
 [Service]
-ExecStart=/etc/slowdns/sldns-server -udp :5300 -privkey-file /etc/slowdns/server.key $Nameserver 127.0.0.1:$SSH_Port2
+ExecStart=/etc/slowdns/sldns-server -udp :53 -privkey-file /etc/slowdns/server.key $Nameserver 127.0.0.1:$SSH_Port2
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target
@@ -802,6 +805,63 @@ EOF
 systemctl daemon-reload
 systemctl enable hysteria-nat.service
 systemctl enable hysteria-server.service
+
+# Creating startup 1 script using cat eof tricks
+cat <<'deekayz' > /etc/deekaystartup
+#!/bin/sh
+
+# Setting server local time
+ln -fs /usr/share/zoneinfo/MyTimeZone /etc/localtime
+
+# Prevent DOS-like UI when installing using APT (Disabling APT interactive dialog)
+export DEBIAN_FRONTEND=noninteractive
+
+# Disable IpV6
+echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6
+
+# Add DNS server ipv4
+echo "nameserver DNS1" > /etc/resolv.conf
+echo "nameserver DNS2" >> /etc/resolv.conf
+
+# For sslh
+mkdir -p /var/run/sslh
+touch /var/run/sslh/sslh.pid
+chmod 777 /var/run/sslh/sslh.pid
+
+# For slowdns
+iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53 -j ACCEPT
+
+# For udp
+IFACE=$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)
+iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
+
+deekayz
+
+sed -i "s|MyTimeZone|$MyVPS_Time|g" /etc/deekaystartup
+sed -i "s|DNS1|$Dns_1|g" /etc/deekaystartup
+sed -i "s|DNS2|$Dns_2|g" /etc/deekaystartup
+
+ # Setting our startup script to run every machine boots 
+cat <<'deekayx' > /etc/systemd/system/deekaystartup.service
+[Unit]
+Description=Custom startup script
+ConditionPathExists=/etc/deekaystartup
+
+[Service]
+Type=oneshot
+ExecStart=/etc/deekaystartup
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+deekayx
+
+chmod +x /etc/deekaystartup
+systemctl enable deekaystartup
+systemctl start deekaystartup
+systemctl status --no-pager deekaystartup
+netfilter-persistent save || true
+cd
 
 # BadVPN Binary
 if [ "$(getconf LONG_BIT)" == "64" ]; then
@@ -1035,7 +1095,7 @@ create_user() {
   echo -e "  Dropbear   : 790, 550"
   echo -e "  SSL/TLS    : 443"
   echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086, 25"
-  echo -e "  SlowDNS    : 5300"
+  echo -e "  SlowDNS    : 53"
   echo -e "  BadVPN     : 7300"
   echo -e "  Hysteria   : 20000-50000"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
@@ -1247,7 +1307,7 @@ draw_header() {
   echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}80, 8080, 8880${NC}      ${WHITE}• Squid:${NC} ${GREEN}8000${NC}"
   echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}2082, 2086, 25${NC}      ${WHITE}• BadVPN:${NC} ${GREEN}7300${NC}"
   echo -e "  ${WHITE}• XRAY TLS:${NC} ${GREEN}443${NC}                  ${WHITE}• XRAY NTLS:${NC} ${GREEN}80, 8080, 8880${NC}"
-  echo -e "  ${WHITE}• SlowDNS:${NC} ${GREEN}5300${NC}                 ${WHITE}• HysteriaUDP:${NC} ${GREEN}20000-50000${NC}"
+  echo -e "  ${WHITE}• SlowDNS:${NC} ${GREEN}53${NC}                  ${WHITE}• HysteriaUDP:${NC} ${GREEN}20000-50000${NC}"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(ram_percent)${NC}   ${WHITE}CPU Used:${NC} ${YELLOW}$(cpu_percent)${NC}   ${WHITE}Buffer:${NC} ${YELLOW}$(buffer_mem)${NC}"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
