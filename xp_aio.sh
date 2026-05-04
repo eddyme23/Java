@@ -779,7 +779,7 @@ JQbf7qSE3mg2
 -----END PRIVATE KEY-----
 EOF
 
-# 4. Generate Sing-box Configuration with WARP routing
+# 4. Generate Sing-box Configuration with Dual WARP/Direct routing
 cat > /etc/hysteria/config.json <<EOF
 {
   "log": { "level": "fatal" },
@@ -813,7 +813,19 @@ cat > /etc/hysteria/config.json <<EOF
     }
   ],
   "route": {
-    "rules": [ { "inbound": "hy1-inbound", "outbound": "warp-proxy" } ]
+    "rules": [
+      {
+        "inbound": "hy1-inbound",
+        "network": "tcp",
+        "outbound": "warp-proxy"
+      },
+      {
+        "inbound": "hy1-inbound",
+        "network": "udp",
+        "outbound": "direct"
+      }
+    ],
+    "auto_detect_interface": true
   }
 }
 EOF
@@ -989,6 +1001,7 @@ add_xray() {
   echo -e " [1] VLESS (TLS & NTLS)"
   echo -e " [2] VMESS (TLS & NTLS)"
   echo -e " [3] TROJAN (TLS)"
+  echo -e " [4] ALL-IN-ONE (VLESS + VMESS + TROJAN)"
   read -rp " Select Protocol: " prot
   read -rp " Username: " user
   
@@ -999,6 +1012,7 @@ add_xray() {
   read -rp " Validity (Days): " masa
   exp=$(date -d "+${masa} days" +"%Y-%m-%d")
   uuid=$(cat /proc/sys/kernel/random/uuid)
+  pass="Guruz${uuid:0:6}"
   
   if [ "$prot" == "1" ]; then
     jq ".inbounds[0].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
@@ -1032,7 +1046,6 @@ add_xray() {
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   
   elif [ "$prot" == "3" ]; then
-    pass="Guruz${uuid:0:6}"
     jq ".inbounds[2].settings.clients += [{\"password\": \"$pass\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     echo "$user $pass $exp" >> /etc/xray/trojan.txt
     
@@ -1042,6 +1055,34 @@ add_xray() {
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "Username: $user\nPassword: $pass\nExpiry: $exp"
     echo -e "\n${YELLOW}TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?path=%2Ftrojan&security=tls&insecure=1&host=${DOMAIN}&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+
+  elif [ "$prot" == "4" ]; then
+    # Inject into ALL Inbounds
+    jq ".inbounds[0].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[3].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[4].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[1].settings.clients += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}] | .inbounds[5].settings.clients += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}] | .inbounds[2].settings.clients += [{\"password\": \"$pass\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+    
+    # Save to all text files
+    echo "$user $uuid $exp" >> /etc/xray/vless.txt
+    echo "$user $uuid $exp" >> /etc/xray/vmess.txt
+    echo "$user $pass $exp" >> /etc/xray/trojan.txt
+
+    clear
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "               ${BOLD}ALL-IN-ONE ACCOUNT CREATED${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "Username: $user\nExpiry:   $exp"
+    echo -e "${CYAN}--------------------------------------------------------------${NC}"
+    
+    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}\nvless://${uuid}@${DOMAIN}:443?path=%2Fvless&security=tls&encryption=none&insecure=1&host=${DOMAIN}&fp=randomized&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}[ VLESS NTLS (80) ]${NC}\nvless://${uuid}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#${user}"
+    
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\",\"alpn\":\"\"}"
+    echo -e "\n${YELLOW}[ VMESS TLS (443) ]${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
+    
+    VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
+    echo -e "\n${YELLOW}[ VMESS NTLS (80) ]${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
+
+    echo -e "\n${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?path=%2Ftrojan&security=tls&insecure=1&host=${DOMAIN}&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   fi
   systemctl restart xray
@@ -1068,14 +1109,24 @@ renew_xray() {
   echo -e "                   ${BOLD}RENEW XRAY ACCOUNT${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to renew: " user
-  target_file=""
-  for proto in vless vmess trojan; do if grep -qw "^$user" "/etc/xray/${proto}.txt"; then target_file="/etc/xray/${proto}.txt"; break; fi; done
-  if [ -z "$target_file" ]; then echo -e "${RED}User not found.${NC}"; pause_return; return; fi
+  
+  # Check if user exists in ANY file
+  if ! grep -qw "^$user" /etc/xray/vless.txt /etc/xray/vmess.txt /etc/xray/trojan.txt 2>/dev/null; then 
+    echo -e "${RED}User not found.${NC}"; pause_return; return
+  fi
+  
   read -rp " Add Validity (Days): " days
-  current_exp=$(grep -w "^$user" "$target_file" | awk '{print $3}')
-  new_exp=$(date -d "$current_exp + $days days" +"%Y-%m-%d")
-  sed -i "s/^$user .* $current_exp/$(grep -w "^$user" "$target_file" | awk '{print $1 " " $2}') $new_exp/" "$target_file"
-  echo -e "\n${GREEN}✔ User $user renewed successfully.${NC}\nNew Expiry: $new_exp"
+  
+  # Loop through all protocol files and update them if the user exists
+  for proto in vless vmess trojan; do 
+    if grep -qw "^$user" "/etc/xray/${proto}.txt"; then
+      current_exp=$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $3}')
+      new_exp=$(date -d "$current_exp + $days days" +"%Y-%m-%d")
+      sed -i "s/^$user .* $current_exp/$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $1 " " $2}') $new_exp/" "/etc/xray/${proto}.txt"
+    fi
+  done
+  
+  echo -e "\n${GREEN}✔ User '$user' renewed successfully.${NC}\nNew Expiry: $new_exp"
   pause_return
 }
 
@@ -1085,21 +1136,33 @@ show_xray() {
   echo -e "                   ${BOLD}SHOW XRAY CONFIG LINKS${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to view: " user
+  
+  local found=0
+
   if grep -qw "^$user" /etc/xray/vless.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
     echo -e "${YELLOW}VLESS TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?path=%2Fvless&security=tls&encryption=none&insecure=1&host=${DOMAIN}&fp=randomized&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
-    echo -e "\n${YELLOW}VLESS NTLS (80):${NC}\nvless://${uuid}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#${user}"
-  elif grep -qw "^$user" /etc/xray/vmess.txt; then
+    echo -e "\n${YELLOW}VLESS NTLS (80):${NC}\nvless://${uuid}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#${user}\n"
+    found=1
+  fi
+  
+  if grep -qw "^$user" /etc/xray/vmess.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vmess.txt | awk '{print $2}')
     VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\",\"alpn\":\"\"}"
     echo -e "${YELLOW}VMESS TLS (443):${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
     VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
-    echo -e "\n${YELLOW}VMESS NTLS (80):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
-  elif grep -qw "^$user" /etc/xray/trojan.txt; then
+    echo -e "\n${YELLOW}VMESS NTLS (80):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)\n"
+    found=1
+  fi
+  
+  if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
-    echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?path=%2Ftrojan&security=tls&insecure=1&host=${DOMAIN}&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
-  else
-    echo -e "${RED}User not found.${NC}"
+    echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?path=%2Ftrojan&security=tls&insecure=1&host=${DOMAIN}&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}\n"
+    found=1
+  fi
+
+  if [ "$found" -eq 0 ]; then
+    echo -e "${RED}User not found in any protocol.${NC}"
   fi
   pause_return
 }
@@ -1143,6 +1206,7 @@ create_user() {
   echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   echo -e "                   ${BOLD}ACCOUNT CREATED SUCCESSFULLY${NC}"
   echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "  ${BOLD}Domain/Host${NC}: ${YELLOW}$DOMAIN${NC}"
   echo -e "  ${BOLD}IP Address${NC} : ${YELLOW}$IP${NC}"
   echo -e "  ${BOLD}Username${NC}   : ${YELLOW}$user${NC}"
   echo -e "  ${BOLD}Password${NC}   : ${YELLOW}$pass${NC}"
@@ -1192,30 +1256,52 @@ online_users() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
 
   declare -A ssh_count dropbear_count total_count
-  while IFS= read -r user; do
-    if [ -n "$user" ] && [ "$user" != "root" ] && id "$user" >/dev/null 2>&1; then
-      ssh_count["$user"]=$(( ${ssh_count["$user"]:-0} + 1 ))
-      total_count["$user"]=$(( ${total_count["$user"]:-0} + 1 ))
-    fi
-  done < <(ps -eo user,comm 2>/dev/null | awk '$2=="sshd" {print $1}')
+  
+  # 1. Fetch only real created SSH users (UID >= 1000)
+  mapfile -t VALID_USERS < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd 2>/dev/null)
 
-  while IFS= read -r user; do
-    if [ -n "$user" ] && [ "$user" != "root" ] && id "$user" >/dev/null 2>&1; then
-      dropbear_count["$user"]=$(( ${dropbear_count["$user"]:-0} + 1 ))
-      total_count["$user"]=$(( ${total_count["$user"]:-0} + 1 ))
+  # 2. Accurately count processes owned by each user instead of raw string matching
+  for user in "${VALID_USERS[@]}"; do
+    s_count=$(ps -u "$user" -o comm 2>/dev/null | grep -wc "sshd")
+    d_count=$(ps -u "$user" -o comm 2>/dev/null | grep -wc "dropbear")
+    
+    if (( s_count > 0 || d_count > 0 )); then
+      ssh_count["$user"]=$s_count
+      dropbear_count["$user"]=$d_count
+      total_count["$user"]=$(( s_count + d_count ))
     fi
-  done < <(ps -eo user,comm 2>/dev/null | awk '$2=="dropbear" {print $1}')
+  done
 
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
-  if [ "${#total_count[@]}" -eq 0 ]; then echo -e "No authenticated legacy users are currently online.\n"
+  if [ "${#total_count[@]}" -eq 0 ]; then 
+    echo -e "  No authenticated legacy users are currently online.\n"
   else
     printf "  %-20s %-10s %-12s %-8s\n" "USERNAME" "SSH" "DROPBEAR" "TOTAL"
     echo -e "${CYAN}  ----------------------------------------------------------${NC}"
-    for user in "${!total_count[@]}"; do printf "  %-20s %-10s %-12s %-8s\n" "$user" "${ssh_count[\"$user\"]:-0}" "${dropbear_count[\"$user\"]:-0}" "${total_count[\"$user\"]:-0}"; done | sort
+    for user in "${!total_count[@]}"; do 
+      printf "  %-20s %-10s %-12s %-8s\n" "$user" "${ssh_count[\"$user\"]:-0}" "${dropbear_count[\"$user\"]:-0}" "${total_count[\"$user\"]:-0}"
+    done | sort
+    echo
   fi
 
-  echo -e "\n${YELLOW}--- XRAY CORE ACTIVE LOGINS ---${NC}"
-  grep -w "accepted" /var/log/xray/access.log | grep "email:" | tail -n 100 | awk '{print $8 " -> " $3}' | sort | uniq -c | sort -nr
+  echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent 500 Connections) ---${NC}"
+  if [ -f /var/log/xray/access.log ]; then
+    # 3. Use regex extraction for the email to prevent field shifting issues
+    active_xray=$(tail -n 500 /var/log/xray/access.log | grep "accepted" | grep -o 'email: [^ ]*' | awk '{print $2}' | sort | uniq -c | sort -nr)
+    
+    if [ -z "$active_xray" ]; then
+      echo -e "  No active Xray users found in recent logs.\n"
+    else
+      printf "  %-15s %-25s\n" "CONNECTIONS" "USERNAME"
+      echo -e "${CYAN}  ----------------------------------------------------------${NC}"
+      while read -r count username; do
+         printf "  %-15s %-25s\n" "$count" "$username"
+      done <<< "$active_xray"
+    fi
+  else
+    echo -e "  Xray access log not found.\n"
+  fi
+  
   echo
   pause_return
 }
