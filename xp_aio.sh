@@ -1407,7 +1407,7 @@ online_users() {
   declare -A active_ssh
   
   # 1. Grab PIDs from established network sockets for both sshd and dropbear
-  mapfile -t pids < <(ss -tnp 2>/dev/null | grep -E 'sshd|dropbear' | grep ESTAB | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+  mapfile -t pids < <(ss -tnp 2>/dev/null | grep -E 'sshd|dropbear' | grep ESTAB | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)
   
   for pid in "${pids[@]}"; do
     # 2. Query the exact user running that specific connection's PID
@@ -1425,7 +1425,8 @@ online_users() {
     printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
     echo -e "${CYAN}  ----------------------------------------------------------${NC}"
     for user in "${!active_ssh[@]}"; do 
-      printf "  %-25s %-15s\n" "$user" "${active_ssh[\"$user\"]}"
+      # FIX: Removed the escaped quotes around $user
+      printf "  %-25s %-15s\n" "$user" "${active_ssh[$user]}"
     done | sort
     echo
   fi
