@@ -1403,40 +1403,36 @@ online_users() {
   echo -e "               ${BOLD}ACTIVE USER SESSIONS (SSH & XRAY)${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
 
-  declare -A ssh_count dropbear_count total_count
+  echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
+  declare -A active_ssh
   
-  # 1. Fetch only real created SSH users (UID >= 1000)
-  mapfile -t VALID_USERS < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd 2>/dev/null)
-
-  # 2. Accurately count processes using pgrep (Searches full process title)
-  for user in "${VALID_USERS[@]}"; do
-    s_count=$(pgrep -u "$user" -f "sshd" 2>/dev/null | wc -l)
-    d_count=$(pgrep -u "$user" -f "dropbear" 2>/dev/null | wc -l)
+  # 1. Grab PIDs from established network sockets for both sshd and dropbear
+  mapfile -t pids < <(ss -tnp 2>/dev/null | grep -E 'sshd|dropbear' | grep ESTAB | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+  
+  for pid in "${pids[@]}"; do
+    # 2. Query the exact user running that specific connection's PID
+    user=$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')
     
-    if (( s_count > 0 || d_count > 0 )); then
-      ssh_count["$user"]=$s_count
-      dropbear_count["$user"]=$d_count
-      total_count["$user"]=$(( s_count + d_count ))
+    # 3. Only count actual created users (exclude system accounts)
+    if [[ -n "$user" && "$user" != "root" && "$user" != "sshd" && "$user" != "nobody" ]]; then
+      active_ssh["$user"]=$((active_ssh["$user"] + 1))
     fi
   done
 
-  echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
-  if [ "${#total_count[@]}" -eq 0 ]; then 
+  if [ "${#active_ssh[@]}" -eq 0 ]; then 
     echo -e "  No authenticated legacy users are currently online.\n"
   else
-    printf "  %-20s %-10s %-12s %-8s\n" "USERNAME" "SSH" "DROPBEAR" "TOTAL"
+    printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
     echo -e "${CYAN}  ----------------------------------------------------------${NC}"
-    for user in "${!total_count[@]}"; do 
-      printf "  %-20s %-10s %-12s %-8s\n" "$user" "${ssh_count[\"$user\"]:-0}" "${dropbear_count[\"$user\"]:-0}" "${total_count[\"$user\"]:-0}"
+    for user in "${!active_ssh[@]}"; do 
+      printf "  %-25s %-15s\n" "$user" "${active_ssh[\"$user\"]}"
     done | sort
     echo
   fi
 
   echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent 500 Connections) ---${NC}"
   if [ -f /var/log/xray/access.log ]; then
-    # 3. Handle different Xray log formats and prevent empty line errors
     active_xray=$(grep "accepted" /var/log/xray/access.log 2>/dev/null | tail -n 500 | grep -oE 'email: [^ ]+' | awk '{print $2}' | sort | uniq -c | sort -nr)
-    
     if [ -z "$active_xray" ]; then
       echo -e "  No active Xray users found in recent logs.\n"
     else
