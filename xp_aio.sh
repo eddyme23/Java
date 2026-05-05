@@ -1260,10 +1260,10 @@ online_users() {
   # 1. Fetch only real created SSH users (UID >= 1000)
   mapfile -t VALID_USERS < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd 2>/dev/null)
 
-  # 2. Accurately count processes owned by each user instead of raw string matching
+  # 2. Accurately count processes using pgrep (Searches full process title)
   for user in "${VALID_USERS[@]}"; do
-    s_count=$(ps -u "$user" -o comm 2>/dev/null | grep -wc "sshd")
-    d_count=$(ps -u "$user" -o comm 2>/dev/null | grep -wc "dropbear")
+    s_count=$(pgrep -u "$user" -f "sshd" 2>/dev/null | wc -l)
+    d_count=$(pgrep -u "$user" -f "dropbear" 2>/dev/null | wc -l)
     
     if (( s_count > 0 || d_count > 0 )); then
       ssh_count["$user"]=$s_count
@@ -1286,8 +1286,8 @@ online_users() {
 
   echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent 500 Connections) ---${NC}"
   if [ -f /var/log/xray/access.log ]; then
-    # 3. Use regex extraction for the email to prevent field shifting issues
-    active_xray=$(tail -n 500 /var/log/xray/access.log | grep "accepted" | grep -o 'email: [^ ]*' | awk '{print $2}' | sort | uniq -c | sort -nr)
+    # 3. Handle different Xray log formats and prevent empty line errors
+    active_xray=$(grep "accepted" /var/log/xray/access.log 2>/dev/null | tail -n 500 | grep -oE 'email: [^ ]+' | awk '{print $2}' | sort | uniq -c | sort -nr)
     
     if [ -z "$active_xray" ]; then
       echo -e "  No active Xray users found in recent logs.\n"
@@ -1295,7 +1295,9 @@ online_users() {
       printf "  %-15s %-25s\n" "CONNECTIONS" "USERNAME"
       echo -e "${CYAN}  ----------------------------------------------------------${NC}"
       while read -r count username; do
-         printf "  %-15s %-25s\n" "$count" "$username"
+         if [ -n "$username" ]; then
+           printf "  %-15s %-25s\n" "$count" "$username"
+         fi
       done <<< "$active_xray"
     fi
   else
