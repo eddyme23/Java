@@ -1596,7 +1596,7 @@ draw_header() {
   echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}80, 8080, 8880${NC}      ${WHITE}• Squid:${NC} ${GREEN}8000${NC}"
   echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}2082, 2086, 25${NC}      ${WHITE}• BadVPN:${NC} ${GREEN}7300${NC}"
   echo -e "  ${WHITE}• XRAY TLS:${NC} ${GREEN}443${NC}                  ${WHITE}• XRAY NTLS:${NC} ${GREEN}80, 8080, 8880${NC}"
-  echo -e "  ${WHITE}• SlowDNS:${NC} ${GREEN}53${NC}                  ${WHITE}• HysteriaUDP:${NC} ${GREEN}20000-50000${NC}"
+  echo -e "  ${WHITE}• SlowDNS:${NC} ${GREEN}53${NC}                    ${WHITE}• HysteriaUDP:${NC} ${GREEN}20000-50000${NC}"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(ram_percent)${NC}   ${WHITE}CPU Used:${NC} ${YELLOW}$(cpu_percent)${NC}   ${WHITE}Buffer:${NC} ${YELLOW}$(buffer_mem)${NC}"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
