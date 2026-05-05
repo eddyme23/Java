@@ -1361,7 +1361,7 @@ create_user() {
   echo -e "  ${BOLD}Expiry${NC}     : ${YELLOW}$(date -d "+$days days" +%Y-%m-%d)${NC}"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
   echo -e "  SSH Port   : 22, 299"
-  echo -e "  Dropbear   : 790, 550"
+  echo -e "  Dropbear   : 80"
   echo -e "  SSL/TLS    : 443"
   echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086, 25"
   echo -e "  SlowDNS    : 53"
