@@ -61,7 +61,7 @@ Stunnel_Port_Num='4443' # For Telegram Bot Checker
 Squid_Port1='3128'
 Squid_Port2='8000'
 
-# Node.js Socks Proxy (80/8080/8880 are handled by Xray and forwarded to 10080)
+# Node.js Socks Proxy (Isolated Ports)
 WsPorts=('10080' '25' '2082' '2086')  
 WsPort='10080'  
 
@@ -383,19 +383,23 @@ sed -i "s|MainPort|$MainPort|g" /etc/stunnel/stunnel.conf
 systemctl restart "$STUNNEL_SERVICE"
 systemctl enable "$STUNNEL_SERVICE"
 
-# Node.js Socks Proxy
+# Node.js Socks Proxy (Isolated Multi-Process)
 loc=/etc/socksproxy
 mkdir -p $loc
 apt-get install -y nodejs
-JS_PORTS="[${WsPorts[*]}]"
-JS_PORTS="${JS_PORTS// /, }"
 
+# Create the dynamic Node.js script
 cat <<EOF > $loc/proxy.js
 const net = require('net');
 process.on('uncaughtException', (err) => { console.error('Unhandled Exception:', err); });
 const TARGET_HOST = '127.0.0.1';
-const TARGET_PORT = $Dropbear_Port1; 
-const LISTEN_PORTS = $JS_PORTS;
+const TARGET_PORT = $Dropbear_Port1; // Routes to Dropbear/SSLH
+const LISTEN_PORT = parseInt(process.argv[2]);
+
+if (!LISTEN_PORT) {
+    console.error('No port provided.');
+    process.exit(1);
+}
 
 const handleConnection = (clientSocket) => {
     clientSocket.once('data', (data) => {
@@ -411,17 +415,17 @@ const handleConnection = (clientSocket) => {
     clientSocket.on('close', () => {});
 };
 
-LISTEN_PORTS.forEach((port) => {
-    const server = net.createServer(handleConnection);
-    server.listen(port, '0.0.0.0', () => { console.log(\`WS Proxy active on port \${port}\`); });
+const server = net.createServer(handleConnection);
+server.listen(LISTEN_PORT, '0.0.0.0', () => { 
+    console.log(\`WS Proxy active on isolated port \${LISTEN_PORT}\`); 
 });
 EOF
 
-cat <<'service' > /etc/systemd/system/ws-proxy.service
+# Create the Systemd Template
+cat <<'service' > /etc/systemd/system/ws-proxy@.service
 [Unit]
-Description=Node.js WebSocket Proxy (All Ports)
+Description=Node.js WebSocket Proxy on port %i
 After=network.target nss-lookup.target
-Wants=network-online.target
 
 [Service]
 Type=simple
@@ -431,19 +435,22 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 LimitNOFILE=1048576
-Restart=on-failure
-ExecStart=/usr/bin/node /etc/socksproxy/proxy.js
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=ws-proxy
+Restart=always
+RestartSec=1
+ExecStart=/usr/bin/node /etc/socksproxy/proxy.js %i
+SyslogIdentifier=ws-proxy-%i
 
 [Install]
 WantedBy=multi-user.target
 service
 
 systemctl daemon-reload
-systemctl enable ws-proxy
-systemctl restart ws-proxy
+
+# Spawn an isolated background process for each port
+for port in "${WsPorts[@]}"; do
+    systemctl enable ws-proxy@$port
+    systemctl restart ws-proxy@$port
+done
 
 # === XRAY CORE INTEGRATION ===
 echo "Installing Xray Core..."
@@ -706,9 +713,11 @@ else restart_after_3_fails squid squid "SQUIDPORT1,SQUIDPORT2"; fi
 if check_port NGINXPORT && systemctl is-active --quiet nginx; then clear_fail nginx
 else restart_after_3_fails nginx nginx "NGINXPORT"; fi
 
-# Node WS Proxy
-if systemctl is-active --quiet ws-proxy; then clear_fail ws-proxy
-else restart_after_3_fails ws-proxy ws-proxy "WS-PORTS"; fi
+# Node WS Proxy (Isolated Ports Check)
+for port in 10080 25 2082 2086; do
+  if check_port $port && systemctl is-active --quiet ws-proxy@$port; then clear_fail ws-proxy-$port
+  else restart_after_3_fails ws-proxy-$port ws-proxy@$port "$port"; fi
+done
 
 # Xray Core
 if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray
@@ -907,7 +916,7 @@ JQbf7qSE3mg2
 -----END PRIVATE KEY-----
 EOF
 
-# 4. Generate Sing-box Configuration with Dual WARP/Direct routing
+# 4. Generate Sing-box Configuration (AdMob Snipe Routing)
 cat > /etc/hysteria/config.json <<EOF
 {
   "log": { "level": "fatal" },
@@ -944,12 +953,23 @@ cat > /etc/hysteria/config.json <<EOF
     "rules": [
       {
         "inbound": "hy1-inbound",
-        "network": "tcp",
+        "domain_suffix": [
+          "doubleclick.net",
+          "googlesyndication.com",
+          "googleadservices.com",
+          "admob.com",
+          "google-analytics.com",
+          "app-measurement.com",
+          "adservice.google.com",
+          "g.doubleclick.net",
+          "google.com/ads",
+          "pagead2.googlesyndication.com",
+          "tpc.googlesyndication.com"
+        ],
         "outbound": "warp-proxy"
       },
       {
         "inbound": "hy1-inbound",
-        "network": "udp",
         "outbound": "direct"
       }
     ],
@@ -1112,7 +1132,7 @@ vnstat_rx() { vnstat -i $(ip route | awk '/default/ {print $5}') --oneline 2>/de
 
 server_status() {
   local ok=0
-  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-server ws-proxy xray; do
+  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-server ws-proxy@10080 xray; do
     systemctl is-active --quiet "$s" 2>/dev/null && ok=$((ok+1))
   done
   [ "$ok" -ge 4 ] && echo -e "${GREEN}ONLINE${NC}" || echo -e "${RED}ISSUES DETECTED${NC}"
@@ -1453,16 +1473,16 @@ service_control_menu() {
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "  [${YELLOW}01${NC}] Restart All Services"
     echo -e "  [${YELLOW}02${NC}] Restart SSH & Dropbear"
-    echo -e "  [${YELLOW}03${NC}] Restart Node WebSocket Proxy"
+    echo -e "  [${YELLOW}03${NC}] Restart Node WebSocket Proxies"
     echo -e "  [${YELLOW}04${NC}] Restart Stunnel & Xray Core"
     echo -e "  [${YELLOW}05${NC}] Restart Squid Proxy & Nginx"
     echo -e "  [${YELLOW}06${NC}] Restart UDP Core (SlowDNS / Hysteria / BadVPN)"
     echo -e "  [${YELLOW}00${NC}] Back\n"
     read -rp "  Select an option: " opt
     case "$opt" in
-      1|01) restart_service "ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy xray" "All Services"; pause_return ;;
+      1|01) restart_service "ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray" "All Services"; pause_return ;;
       2|02) restart_service "ssh dropbear" "SSH & Dropbear"; pause_return ;;
-      3|03) restart_service "ws-proxy" "Node WebSocket Proxy"; pause_return ;;
+      3|03) restart_service "ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086" "Node WebSocket Proxies"; pause_return ;;
       4|04) restart_service "stunnel4 xray" "Stunnel & Xray Core"; pause_return ;;
       5|05) restart_service "squid nginx" "Squid Proxy & Nginx"; pause_return ;;
       6|06) restart_service "server-sldns hysteria-server badvpn" "UDP Core Services"; pause_return ;;
@@ -1476,7 +1496,7 @@ service_control_menu() {
 backup_snapshot() {
   clear; local out="/root/guruzgh_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
   echo -e "Packaging server configurations..."
-  tar -czf "$out" /etc/ssh /etc/default/dropbear /etc/stunnel /etc/squid /etc/hysteria /etc/deekayvpn /etc/systemd/system/ws-proxy.service /etc/xray 2>/dev/null
+  tar -czf "$out" /etc/ssh /etc/default/dropbear /etc/stunnel /etc/squid /etc/hysteria /etc/deekayvpn /etc/systemd/system/ws-proxy@.service /etc/xray 2>/dev/null
   echo -e "\n${GREEN}✔ Backup successfully created!${NC}\nLocation: ${YELLOW}$out${NC}"
   pause_return
 }
@@ -1498,7 +1518,7 @@ restore_snapshot() {
   if [ -n "${backups[$idx]}" ]; then
     echo -e "\nRestoring ${YELLOW}$(basename "${backups[$idx]}")${NC}..."
     tar -xzf "${backups[$idx]}" -C /
-    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy xray 2>/dev/null || true
+    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray 2>/dev/null || true
     echo -e "${GREEN}✔ Restore complete!${NC}"
   else echo -e "${RED}Invalid selection.${NC}"; fi
   pause_return
@@ -1520,11 +1540,11 @@ advanced_menu() {
     case "$opt" in
       1|01) clear; cat /etc/hysteria/config.json 2>/dev/null || echo "Not found."; pause_return ;;
       2|02) 
-        clear; echo -e "[1] SSH  [2] WS-Proxy  [3] Hysteria  [4] Stunnel  [5] SlowDNS  [6] Xray\n"
+        clear; echo -e "[1] SSH  [2] WS-Proxies  [3] Hysteria  [4] Stunnel  [5] SlowDNS  [6] Xray\n"
         read -rp "Select log: " lopt
         case "$lopt" in
           1) journalctl -u ssh -n 50 --no-pager ;;
-          2) journalctl -u ws-proxy -n 50 --no-pager ;;
+          2) journalctl -u ws-proxy@10080 -n 50 --no-pager ;;
           3) journalctl -u hysteria-server -n 50 --no-pager ;;
           4) journalctl -u stunnel4 -n 50 --no-pager ;;
           5) journalctl -u server-sldns -n 50 --no-pager ;;
@@ -1553,10 +1573,10 @@ remove_script() {
   read -rp "  Are you absolutely sure? [y/N]: " ans
   if [[ "$ans" =~ ^[Yy]$ ]]; then
       echo -e "\nStopping services..."
-      systemctl stop ws-proxy server-sldns badvpn hysteria-server sslh stunnel4 squid dropbear nginx xray 2>/dev/null || true
-      systemctl disable ws-proxy server-sldns badvpn hysteria-server xray 2>/dev/null || true
+      systemctl stop ws-proxy@* server-sldns badvpn hysteria-server sslh stunnel4 squid dropbear nginx xray 2>/dev/null || true
+      systemctl disable ws-proxy@* server-sldns badvpn hysteria-server xray 2>/dev/null || true
       echo "Deleting files..."
-      rm -f /etc/systemd/system/ws-proxy.service /etc/systemd/system/server-sldns.service /etc/systemd/system/badvpn.service /etc/systemd/system/xray.service
+      rm -f /etc/systemd/system/ws-proxy@.service /etc/systemd/system/server-sldns.service /etc/systemd/system/badvpn.service /etc/systemd/system/xray.service
       rm -f /etc/cron.d/service-checker /etc/cron.d/logrotate /etc/cron.d/xray-expiry /etc/sysctl.d/99-freenet-tuning.conf /etc/security/limits.d/99-freenet.conf
       rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /usr/local/bin/menu /usr/bin/menu /usr/bin/Menu
       systemctl daemon-reload; sysctl --system >/dev/null 2>&1 || true
