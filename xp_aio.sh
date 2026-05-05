@@ -622,25 +622,153 @@ sed -i "s|Squid_Port1|$Squid_Port1|g" /etc/squid/squid.conf
 sed -i "s|Squid_Port2|$Squid_Port2|g" /etc/squid/squid.conf
 systemctl restart "$SQUID_SERVICE"
 
-mkdir -p /etc/deekayvpn
+# Make a folder for health checks
+mkdir -p /etc/deekayvpn/health
+
+# Cronjob script for auto restart services and Telegram alerts
 cat <<'ServiceChecker' > /etc/deekayvpn/service_checker.sh
 #!/bin/bash
+
 MYID="MYCHATID"
 KEY="MYBOTID"
 URL="https://api.telegram.org/bot${KEY}/sendMessage"
-send_telegram_message() {
-    curl -s --max-time 10 -d "chat_id=${MYID}&text=$1&disable_web_page_preview=true&parse_mode=markdown" "${URL}" >/dev/null 2>&1
-}
-# basic port checks ...
-ServiceChecker
-chmod 755 /etc/deekayvpn/service_checker.sh
 
-# High-concurrency tuning
+send_telegram_message() {
+    local TEXT="$1"
+    curl -s --max-time 10 --retry 5 --retry-delay 2 --retry-max-time 10 \
+      -d "chat_id=${MYID}&text=${TEXT}&disable_web_page_preview=true&parse_mode=markdown" \
+      "${URL}" >/dev/null 2>&1
+}
+
+server_ip="IPADDRESS"
+datenow=$(date +"%Y-%m-%d %T")
+IPCOUNTRY=$(curl -s "https://freeipapi.com/api/json/${server_ip}" | jq -r '.countryName')
+
+STATE_DIR="/etc/deekayvpn/health"
+
+check_port() {
+    local port="$1"
+    ss -lnt | awk '{print $4}' | grep -q ":${port}$"
+}
+
+mark_fail() {
+    local name="$1"
+    local f="$STATE_DIR/${name}.fail"
+    local n=0
+    [ -f "$f" ] && n=$(cat "$f")
+    n=$((n+1))
+    echo "$n" > "$f"
+    echo "$n"
+}
+
+clear_fail() {
+    local name="$1"
+    rm -f "$STATE_DIR/${name}.fail"
+}
+
+restart_after_3_fails() {
+    local name="$1"
+    local unit="$2"
+    local ports="$3"
+
+    local fails
+    fails=$(mark_fail "$name")
+
+    if [ "$fails" -ge 3 ]; then
+        systemctl restart "$unit" >/dev/null 2>&1
+        TEXT="Service *$unit* was offline or missing port(s) *$ports* on server *${IPCOUNTRY}* ($server_ip). It has been auto-restarted at *${datenow}*."
+        send_telegram_message "$TEXT"
+        clear_fail "$name"
+    fi
+}
+
+# SSH
+if check_port SSHPORT1 && check_port SSHPORT2 && systemctl is-active --quiet ssh; then clear_fail ssh
+else restart_after_3_fails ssh ssh "SSHPORT1,SSHPORT2"; fi
+
+# Dropbear
+if check_port DROPBEARPORT1 && check_port DROPBEARPORT2 && systemctl is-active --quiet dropbear; then clear_fail dropbear
+else restart_after_3_fails dropbear dropbear "DROPBEARPORT1,DROPBEARPORT2"; fi
+
+# Stunnel
+if check_port STUNNELPORT && systemctl is-active --quiet stunnel4; then clear_fail stunnel4
+else restart_after_3_fails stunnel4 stunnel4 "STUNNELPORT"; fi
+
+# SSLH
+if check_port SSLHPORT && systemctl is-active --quiet sslh; then clear_fail sslh
+else restart_after_3_fails sslh sslh "SSLHPORT"; fi
+
+# Squid
+if check_port SQUIDPORT1 && check_port SQUIDPORT2 && systemctl is-active --quiet squid; then clear_fail squid
+else restart_after_3_fails squid squid "SQUIDPORT1,SQUIDPORT2"; fi
+
+# Nginx
+if check_port NGINXPORT && systemctl is-active --quiet nginx; then clear_fail nginx
+else restart_after_3_fails nginx nginx "NGINXPORT"; fi
+
+# Node WS Proxy
+if systemctl is-active --quiet ws-proxy; then clear_fail ws-proxy
+else restart_after_3_fails ws-proxy ws-proxy "WS-PORTS"; fi
+
+# Xray Core
+if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray
+else restart_after_3_fails xray xray "443, 80"; fi
+
+# Sing-box (Hysteria)
+if systemctl is-active --quiet hysteria-server; then clear_fail hysteria-server
+else restart_after_3_fails hysteria-server hysteria-server "UDP"; fi
+
+ServiceChecker
+
+chmod 755 /etc/deekayvpn/service_checker.sh
+sed -i "s|MYCHATID|$My_Chat_ID|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|MYBOTID|$My_Bot_Key|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|IPADDRESS|$IPADDR|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|DROPBEARPORT1|$Dropbear_Port1|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|DROPBEARPORT2|$Dropbear_Port2|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|STUNNELPORT|$Stunnel_Port_Num|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|SSLHPORT|$MainPort|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|SQUIDPORT1|$Squid_Port1|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|SQUIDPORT2|$Squid_Port2|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|NGINXPORT|$Nginx_Port|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|SSHPORT1|$SSH_Port1|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|SSHPORT2|$SSH_Port2|g" /etc/deekayvpn/service_checker.sh
+
+# Install Cronjobs for Health Checker & Logrotate
+echo "*/3 * * * * root /bin/bash /etc/deekayvpn/service_checker.sh >/dev/null 2>&1" > /etc/cron.d/service-checker
+
+rm -f /etc/logrotate.d/rsyslog
+cat <<'logrotate' > /etc/logrotate.d/rsyslog
+/var/log/syslog /var/log/kern.log /var/log/auth.log /var/log/xray/access.log /var/log/xray/error.log
+{
+        rotate 7
+        daily
+        missingok
+        notifempty
+        compress
+        delaycompress
+        sharedscripts
+        postrotate
+                /usr/lib/rsyslog/rsyslog-rotate
+        endscript
+}
+logrotate
+chown root:root /var/log; chmod 755 /var/log
+chown syslog:adm /var/log/syslog; chmod 640 /var/log/syslog
+echo "*/5 * * * * root /usr/sbin/logrotate -v -f /etc/logrotate.d/rsyslog >/dev/null 2>&1" > /etc/cron.d/logrotate
+
+# Aggressive High-concurrency tuning for massive user loads
 cat <<'SYSCTL' > /etc/sysctl.d/99-freenet-tuning.conf
 fs.file-max = 1048576
 net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 16384
+net.ipv4.ip_local_port_range = 1024 65000
 net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.tcp_fin_timeout = 15
 net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_keepalive_time = 600
+net.ipv4.tcp_keepalive_intvl = 60
+net.ipv4.tcp_keepalive_probes = 10
 SYSCTL
 sysctl --system || true
 
@@ -1213,10 +1341,10 @@ create_user() {
   echo -e "  ${BOLD}Expiry${NC}     : ${YELLOW}$(date -d "+$days days" +%Y-%m-%d)${NC}"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
   echo -e "  SSH Port   : 22, 299"
-  echo -e "  Dropbear   : 80"
+  echo -e "  Dropbear   : 790, 550"
   echo -e "  SSL/TLS    : 443"
   echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086, 25"
-  echo -e "  SlowDNS    : 5300"
+  echo -e "  SlowDNS    : 53"
   echo -e "  BadVPN     : 7300"
   echo -e "  Hysteria   : 20000-50000"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
@@ -1452,7 +1580,7 @@ draw_header() {
   echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}80, 8080, 8880${NC}      ${WHITE}• Squid:${NC} ${GREEN}8000${NC}"
   echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}2082, 2086, 25${NC}      ${WHITE}• BadVPN:${NC} ${GREEN}7300${NC}"
   echo -e "  ${WHITE}• XRAY TLS:${NC} ${GREEN}443${NC}                  ${WHITE}• XRAY NTLS:${NC} ${GREEN}80, 8080, 8880${NC}"
-  echo -e "  ${WHITE}• SlowDNS:${NC} ${GREEN}5300${NC}                  ${WHITE}• HysteriaUDP:${NC} ${GREEN}20000-50000${NC}"
+  echo -e "  ${WHITE}• SlowDNS:${NC} ${GREEN}53${NC}                  ${WHITE}• HysteriaUDP:${NC} ${GREEN}20000-50000${NC}"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(ram_percent)${NC}   ${WHITE}CPU Used:${NC} ${YELLOW}$(cpu_percent)${NC}   ${WHITE}Buffer:${NC} ${YELLOW}$(buffer_mem)${NC}"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
