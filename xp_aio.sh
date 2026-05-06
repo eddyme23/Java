@@ -1406,20 +1406,18 @@ online_users() {
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
   declare -A active_ssh
   
-  # 1. Ask Linux directly which users are running SSH/Dropbear processes.
-  # This catches the unprivileged "child" processes spawned for connected users.
-  # We filter out 'root', 'sshd' (privilege separation accounts), and blank lines.
-  mapfile -t running_users < <(ps -C sshd,dropbear -o user= 2>/dev/null | tr -d ' ' | grep -Ev "^root$|^sshd$|^nobody$|^$")
+  # 1. Grab all active SSH/Dropbear PIDs from established network sockets
+  pids=$(ss -tnp 2>/dev/null | grep -iE 'sshd|dropbear' | grep 'ESTAB' | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)
   
-  for u in "${running_users[@]}"; do
-    # 2. Verify it is a real account you created (UID 1000 or higher)
-    if id -u "$u" >/dev/null 2>&1; then
-        uid=$(id -u "$u")
-        if (( uid >= 1000 )); then
-            # 3. Add to the count!
-            active_ssh["$u"]=$((active_ssh["$u"] + 1))
-        fi
-    fi
+  # 2. Cross-reference the PID with the authentication log to find the exact username
+  for pid in $pids; do
+      # This looks directly into the auth log for the exact moment that PID successfully logged in
+      user=$(grep "\[$pid\]" /var/log/auth.log 2>/dev/null | grep -E "Accepted|auth succeeded" | awk '{for(i=1;i<=NF;i++) if($i=="for") print $(i+1)}' | tr -d "'" | head -n 1)
+      
+      # If a username is found attached to that active PID, count the session!
+      if [[ -n "$user" ]]; then
+          active_ssh["$user"]=$((active_ssh["$user"] + 1))
+      fi
   done
 
   if [ "${#active_ssh[@]}" -eq 0 ]; then 
@@ -1434,7 +1432,14 @@ online_users() {
   fi
 
   echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent 500 Connections) ---${NC}"
-  if [ -f /var/log/xray/access.log ]; then
+  
+  # 3. FIX FOR XRAY: If loglevel is set to 'warning', Xray won't log connections. 
+  # This automatically fixes the config and restarts Xray so it starts tracking.
+  if grep -q '"loglevel": "warning"' /etc/xray/config.json 2>/dev/null; then
+      sed -i 's/"loglevel": "warning"/"loglevel": "info"/g' /etc/xray/config.json
+      systemctl restart xray 2>/dev/null
+      echo -e "  [System Note] Xray logging was just enabled. Reconnect your Xray user to see them here.\n"
+  elif [ -f /var/log/xray/access.log ]; then
     active_xray=$(grep "accepted" /var/log/xray/access.log 2>/dev/null | tail -n 500 | grep -oE 'email: [^ ]+' | awk '{print $2}' | sort | uniq -c | sort -nr)
     if [ -z "$active_xray" ]; then
       echo -e "  No active Xray users found in recent logs.\n"
