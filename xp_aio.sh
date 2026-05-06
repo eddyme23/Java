@@ -14,7 +14,7 @@ case "$ID:$VERSION_ID" in
   ubuntu:22.04) SUPPORT_LEVEL="recommended" ;;
   ubuntu:24.04) SUPPORT_LEVEL="supported" ;;
   debian:11) SUPPORT_LEVEL="legacy" ;;
-  debian:12) SUPPORT_LEVEL="supported" ;;
+  debian:12) SUPPORT_LEVEL="recommended" ;;
   debian:13) SUPPORT_LEVEL="supported" ;;
   *) SUPPORT_LEVEL="unsupported" ;;
 esac
