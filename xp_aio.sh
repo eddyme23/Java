@@ -766,6 +766,9 @@ chown root:root /var/log; chmod 755 /var/log
 chown syslog:adm /var/log/syslog; chmod 640 /var/log/syslog
 echo "*/5 * * * * root /usr/sbin/logrotate -v -f /etc/logrotate.d/rsyslog >/dev/null 2>&1" > /etc/cron.d/logrotate
 
+# NEW CRONJOB: Drop Cache (Clears RAM without dropping connections)
+echo "0 3 * * * root sync; echo 3 > /proc/sys/vm/drop_caches" > /etc/cron.d/drop-cache
+
 # Aggressive High-concurrency tuning for massive user loads
 cat <<'SYSCTL' > /etc/sysctl.d/99-freenet-tuning.conf
 fs.file-max = 1048576
@@ -1173,8 +1176,8 @@ add_xray() {
     echo -e "                   ${BOLD}VLESS ACCOUNT CREATED${NC}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "Username : $user\nExpiry   : $exp"
-    echo -e "\n${YELLOW}TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?path=%2Fvless&security=tls&encryption=none&insecure=1&host=${DOMAIN}&fp=randomized&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
-    echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvless://${uuid}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#${user}"
+    echo -e "\n${YELLOW}TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   
   elif [ "$prot" == "2" ]; then
@@ -1187,7 +1190,7 @@ add_xray() {
     echo -e "                   ${BOLD}VMESS ACCOUNT CREATED${NC}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "Username: $user\nExpiry: $exp"
-    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\",\"alpn\":\"\"}"
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
     echo -e "\n${YELLOW}TLS (443):${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
     VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
     echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
@@ -1202,7 +1205,7 @@ add_xray() {
     echo -e "                   ${BOLD}TROJAN ACCOUNT CREATED${NC}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "Username: $user\nPassword: $pass\nExpiry: $exp"
-    echo -e "\n${YELLOW}TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?path=%2Ftrojan&security=tls&insecure=1&host=${DOMAIN}&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}#${user}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
 
   elif [ "$prot" == "4" ]; then
@@ -1221,16 +1224,16 @@ add_xray() {
     echo -e "Username: $user\nExpiry:   $exp"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     
-    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}\nvless://${uuid}@${DOMAIN}:443?path=%2Fvless&security=tls&encryption=none&insecure=1&host=${DOMAIN}&fp=randomized&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
-    echo -e "\n${YELLOW}[ VLESS NTLS (80) ]${NC}\nvless://${uuid}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#${user}"
+    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}[ VLESS NTLS (80) ]${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}"
     
-    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\",\"alpn\":\"\"}"
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
     echo -e "\n${YELLOW}[ VMESS TLS (443) ]${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
     
     VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
     echo -e "\n${YELLOW}[ VMESS NTLS (80) ]${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
 
-    echo -e "\n${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?path=%2Ftrojan&security=tls&insecure=1&host=${DOMAIN}&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}#${user}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   fi
   systemctl restart xray
@@ -1289,14 +1292,14 @@ show_xray() {
 
   if grep -qw "^$user" /etc/xray/vless.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
-    echo -e "${YELLOW}VLESS TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?path=%2Fvless&security=tls&encryption=none&insecure=1&host=${DOMAIN}&fp=randomized&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}"
-    echo -e "\n${YELLOW}VLESS NTLS (80):${NC}\nvless://${uuid}@${DOMAIN}:80?host=${DOMAIN}&path=%2Fvless&security=none&encryption=none&type=ws#${user}\n"
+    echo -e "${YELLOW}VLESS TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}VLESS NTLS (80):${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}\n"
     found=1
   fi
   
   if grep -qw "^$user" /etc/xray/vmess.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vmess.txt | awk '{print $2}')
-    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\",\"alpn\":\"\"}"
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
     echo -e "${YELLOW}VMESS TLS (443):${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
     VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
     echo -e "\n${YELLOW}VMESS NTLS (80):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)\n"
@@ -1305,7 +1308,7 @@ show_xray() {
   
   if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
-    echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?path=%2Ftrojan&security=tls&insecure=1&host=${DOMAIN}&type=ws&allowInsecure=1&sni=${DOMAIN}#${user}\n"
+    echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}#${user}\n"
     found=1
   fi
 
@@ -1414,7 +1417,7 @@ online_users() {
       # This looks directly into the auth log for the exact moment that PID successfully logged in
       user=$(grep "\[$pid\]" /var/log/auth.log 2>/dev/null | grep -E "Accepted|auth succeeded" | awk '{for(i=1;i<=NF;i++) if($i=="for") print $(i+1)}' | tr -d "'" | head -n 1)
       
-      # If a username is found attached to that active PID, count the session!
+      # If a username is found attached to that active PID, count the session! (ignoring root)
       if [[ -n "$user" && "$user" != "root" ]]; then
           active_ssh["$user"]=$((active_ssh["$user"] + 1))
       fi
