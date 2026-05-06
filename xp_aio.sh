@@ -1415,7 +1415,7 @@ online_users() {
       user=$(grep "\[$pid\]" /var/log/auth.log 2>/dev/null | grep -E "Accepted|auth succeeded" | awk '{for(i=1;i<=NF;i++) if($i=="for") print $(i+1)}' | tr -d "'" | head -n 1)
       
       # If a username is found attached to that active PID, count the session!
-      if [[ -n "$user" ]]; then
+      if [[ -n "$user" && "$user" != "root" ]]; then
           active_ssh["$user"]=$((active_ssh["$user"] + 1))
       fi
   done
