@@ -14,7 +14,7 @@ case "$ID:$VERSION_ID" in
   ubuntu:22.04) SUPPORT_LEVEL="recommended" ;;
   ubuntu:24.04) SUPPORT_LEVEL="supported" ;;
   debian:11) SUPPORT_LEVEL="legacy" ;;
-  debian:12) SUPPORT_LEVEL="recommended" ;;
+  debian:12) SUPPORT_LEVEL="supported" ;;
   debian:13) SUPPORT_LEVEL="supported" ;;
   *) SUPPORT_LEVEL="unsupported" ;;
 esac
@@ -1163,6 +1163,8 @@ add_xray() {
   read -rp " Validity (Days): " masa
   exp=$(date -d "+${masa} days" +"%Y-%m-%d")
   uuid=$(cat /proc/sys/kernel/random/uuid)
+  
+  # FIX: Define the Trojan password globally so Option 4 can use it!
   pass="Guruz${uuid:0:6}"
   
   if [ "$prot" == "1" ]; then
