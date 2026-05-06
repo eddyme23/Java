@@ -1178,7 +1178,7 @@ add_xray() {
     echo -e "                   ${BOLD}VLESS ACCOUNT CREATED${NC}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "Username : $user\nExpiry   : $exp"
-    echo -e "\n${YELLOW}TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
     echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   
@@ -1207,7 +1207,7 @@ add_xray() {
     echo -e "                   ${BOLD}TROJAN ACCOUNT CREATED${NC}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "Username: $user\nPassword: $pass\nExpiry: $exp"
-    echo -e "\n${YELLOW}TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
 
   elif [ "$prot" == "4" ]; then
@@ -1226,7 +1226,7 @@ add_xray() {
     echo -e "Username: $user\nExpiry:   $exp"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     
-    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
     echo -e "\n${YELLOW}[ VLESS NTLS (80) ]${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}"
     
     VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
@@ -1235,7 +1235,7 @@ add_xray() {
     VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
     echo -e "\n${YELLOW}[ VMESS NTLS (80) ]${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
 
-    echo -e "\n${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   fi
   systemctl restart xray
@@ -1294,7 +1294,7 @@ show_xray() {
 
   if grep -qw "^$user" /etc/xray/vless.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
-    echo -e "${YELLOW}VLESS TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}#${user}"
+    echo -e "${YELLOW}VLESS TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
     echo -e "\n${YELLOW}VLESS NTLS (80):${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}\n"
     found=1
   fi
@@ -1310,7 +1310,7 @@ show_xray() {
   
   if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
-    echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}#${user}\n"
+    echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
     found=1
   fi
 
