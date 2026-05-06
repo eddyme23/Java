@@ -1406,16 +1406,19 @@ online_users() {
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
   declare -A active_ssh
   
-  # 1. Grab PIDs directly from established sockets (The method that detected zEddy!)
-  pids=$(ss -tnp 2>/dev/null | grep -E 'sshd|dropbear' | grep 'ESTAB' | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+  # 1. Ask Linux directly which users are running SSH/Dropbear processes.
+  # This catches the unprivileged "child" processes spawned for connected users.
+  # We filter out 'root', 'sshd' (privilege separation accounts), and blank lines.
+  mapfile -t running_users < <(ps -C sshd,dropbear -o user= 2>/dev/null | tr -d ' ' | grep -Ev "^root$|^sshd$|^nobody$|^$")
   
-  for pid in $pids; do
-    # 2. Query the exact user and strip any hidden spaces or line breaks
-    user=$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' \r\n')
-    
-    # 3. Filter out system accounts
-    if [[ -n "$user" && "$user" != "root" && "$user" != "sshd" && "$user" != "nobody" ]]; then
-      active_ssh["$user"]=$((active_ssh["$user"] + 1))
+  for u in "${running_users[@]}"; do
+    # 2. Verify it is a real account you created (UID 1000 or higher)
+    if id -u "$u" >/dev/null 2>&1; then
+        uid=$(id -u "$u")
+        if (( uid >= 1000 )); then
+            # 3. Add to the count!
+            active_ssh["$u"]=$((active_ssh["$u"] + 1))
+        fi
     fi
   done
 
@@ -1425,7 +1428,6 @@ online_users() {
     printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
     echo -e "${CYAN}  ----------------------------------------------------------${NC}"
     for user in "${!active_ssh[@]}"; do 
-      # FIX: Correct array printing syntax to show the actual number
       printf "  %-25s %-15s\n" "$user" "${active_ssh[$user]}"
     done | sort
     echo
