@@ -1406,24 +1406,18 @@ online_users() {
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
   declare -A active_ssh
   
-  # Iterate over all valid created users (UID >= 1000) directly from the system password file
-  while IFS=: read -r u_name _ uid _; do
-      if (( uid >= 1000 )) && [[ "$u_name" != "nobody" ]]; then
-          
-          # Count OpenSSH processes explicitly tied to this username
-          ssh_conns=$(ps -ef | grep "sshd: $u_name" | grep -v grep | wc -l)
-          
-          # Count Dropbear processes executing under this user's ID
-          dropbear_conns=$(ps -u "$u_name" 2>/dev/null | grep -i "dropbear" | wc -l)
-          
-          total_conns=$((ssh_conns + dropbear_conns))
-          
-          # If the user has 1 or more active background processes, add them to the list
-          if (( total_conns > 0 )); then
-              active_ssh["$u_name"]=$total_conns
-          fi
-      fi
-  done < /etc/passwd
+  # 1. Grab PIDs directly from established sockets (The method that detected zEddy!)
+  pids=$(ss -tnp 2>/dev/null | grep -E 'sshd|dropbear' | grep 'ESTAB' | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+  
+  for pid in $pids; do
+    # 2. Query the exact user and strip any hidden spaces or line breaks
+    user=$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' \r\n')
+    
+    # 3. Filter out system accounts
+    if [[ -n "$user" && "$user" != "root" && "$user" != "sshd" && "$user" != "nobody" ]]; then
+      active_ssh["$user"]=$((active_ssh["$user"] + 1))
+    fi
+  done
 
   if [ "${#active_ssh[@]}" -eq 0 ]; then 
     echo -e "  No authenticated legacy users are currently online.\n"
@@ -1431,7 +1425,7 @@ online_users() {
     printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
     echo -e "${CYAN}  ----------------------------------------------------------${NC}"
     for user in "${!active_ssh[@]}"; do 
-      # Prints the exact integer of how many threads the user has open
+      # FIX: Correct array printing syntax to show the actual number
       printf "  %-25s %-15s\n" "$user" "${active_ssh[$user]}"
     done | sort
     echo
