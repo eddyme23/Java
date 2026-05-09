@@ -14,7 +14,7 @@ case "$ID:$VERSION_ID" in
   ubuntu:22.04) SUPPORT_LEVEL="recommended" ;;
   ubuntu:24.04) SUPPORT_LEVEL="supported" ;;
   debian:11) SUPPORT_LEVEL="legacy" ;;
-  debian:12) SUPPORT_LEVEL="recommended" ;;
+  debian:12) SUPPORT_LEVEL="supported" ;;
   debian:13) SUPPORT_LEVEL="supported" ;;
   *) SUPPORT_LEVEL="unsupported" ;;
 esac
@@ -26,7 +26,7 @@ echo ""
 echo "Supported Operating Systems:"
 echo ""
 echo "  ✔ Debian 13              (Supported)"
-echo "  ✔ Debian 12              (Recommended)"
+echo "  ✔ Debian 12              (supported)"
 echo "  ✔ Debian 11              (Legacy Support)"
 echo "  ✔ Ubuntu 24.04           (Supported)"
 echo "  ✔ Ubuntu 22.04           (Recommended)"
