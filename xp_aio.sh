@@ -967,7 +967,13 @@ cat > /etc/hysteria/config.json <<EOF
           "g.doubleclick.net",
           "google.com/ads",
           "pagead2.googlesyndication.com",
-          "tpc.googlesyndication.com"
+          "tpc.googlesyndication.com",
+		  "googlevideo.com",
+		  "gvt1.com",
+		  "gvt2.com",
+		  "gvt3.com",
+		  "ytimg.com",
+		  "youtube.com"
         ],
         "outbound": "warp-proxy"
       },
