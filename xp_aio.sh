@@ -1525,6 +1525,8 @@ create_user() {
   useradd -e "$(date -d "+$days days" +%Y-%m-%d)" -s /bin/false -M "$user" && echo "$user:$pass" | chpasswd
 
   IP=$(curl -s ipv4.icanhazip.com)
+  CURRENT_NS=$(grep 'ExecStart=' /etc/systemd/system/server-sldns.service 2>/dev/null | sed 's/.*server\.key \([^ ]*\) .*/\1/')
+
   clear
   echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   echo -e "                   ${BOLD}ACCOUNT CREATED SUCCESSFULLY${NC}"
@@ -1550,6 +1552,7 @@ create_user() {
   echo -e "  ${BOLD}Payload Enhanced :${NC}"
   echo -e "  ${YELLOW}GET / HTTP/1.1[crlf]Host: bug.com[crlf][crlf]PATCH / HTTP/1.1[crlf]Host: ${DOMAIN}[crlf]Connection: upgrade[crlf]Upgrade: websocket[crlf][crlf]${NC}"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
+  echo -e "  ${BOLD}SlowDNS NS ${NC}: ${YELLOW}${CURRENT_NS:-Not Set}${NC}"
   echo -e "  ${BOLD}DNS PUB KEY${NC}: 7fbd1f8aa0abfe15a7903e837f78aba39cf61d36f183bd604daa2fe4ef3b7b59"
   echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   pause_return
