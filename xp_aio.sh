@@ -42,7 +42,7 @@ if [ "$SUPPORT_LEVEL" = "unsupported" ]; then
 fi
 
 #Script Variables
-read -p "Enter your Domain/Subdomain for Xray (or press enter for IP): " -e -i "$(curl -4 -s ipv4.icanhazip.com)" DOMAIN
+read -p "Enter your Domain/Subdomain for Xray (or press enter for IP): " -e -i "$(curl -4 -s --max-time 2 ipv4.icanhazip.com || hostname -I | awk '{print $1}')" DOMAIN
 export DOMAIN
 
 # OpenSSH Ports
@@ -578,6 +578,25 @@ EOF_EXP
 chmod +x /usr/local/bin/exp-check
 echo "0 0 * * * root /usr/local/bin/exp-check >/dev/null 2>&1" > /etc/cron.d/xray-expiry
 
+# USER EXPIRY CRONJOB FOR HYSTERIA
+cat <<'EOF_HYST_EXP' > /usr/local/bin/hysteria-exp
+#!/bin/bash
+now=$(date +%Y-%m-%d)
+USER_DB="/etc/hysteria/users.txt"
+CONFIG="/etc/hysteria/config.json"
+if [ -f "$USER_DB" ]; then
+  while read -r user exp; do
+    if [[ "$now" > "$exp" ]]; then
+      jq ".inbounds[0].users |= map(select(.auth_str != \"$user\"))" "$CONFIG" > /tmp/h.json && mv /tmp/h.json "$CONFIG"
+      sed -i "/^$user /d" "$USER_DB"
+    fi
+  done < "$USER_DB"
+  systemctl restart hysteria-server
+fi
+EOF_HYST_EXP
+chmod +x /usr/local/bin/hysteria-exp
+echo "0 0 * * * root /usr/local/bin/hysteria-exp >/dev/null 2>&1" > /etc/cron.d/hysteria-expiry
+
 # Nginx configure
 rm /home/vps/public_html -rf
 rm /etc/nginx/sites-* -rf
@@ -829,6 +848,7 @@ systemctl restart server-sldns
 curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
 apt-get update && apt-get install -y cloudflare-warp
+warp-cli --accept-tos registration delete 2>/dev/null || true
 warp-cli --accept-tos registration new
 warp-cli --accept-tos mode proxy
 warp-cli --accept-tos connect
@@ -1014,6 +1034,8 @@ chmod 755 /etc/hysteria/config.json
 chmod 755 /etc/hysteria/hysteria.crt
 chmod 755 /etc/hysteria/hysteria.key
 
+echo "$PASSWORD $(date -d "+365 days" +"%Y-%m-%d")" > /etc/hysteria/users.txt
+
 # 5. Create Systemd Service Alias
 cat > /etc/systemd/system/hysteria-server.service <<EOF
 [Unit]
@@ -1151,7 +1173,11 @@ MAGENTA='\033[1;35m'
 WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 BOLD='\033[1m'
-DOMAIN="DOMAIN_PLACEHOLDER"
+DOMAIN=$(grep '"add"' /etc/xray/config.json 2>/dev/null | grep -o 'add":"[^"]*' | cut -d'"' -f3 | head -1)
+
+HYST_CONFIG="/etc/hysteria/config.json"
+HYST_USER_DB="/etc/hysteria/users.txt"
+touch "$HYST_USER_DB" 2>/dev/null || true
 
 # --- Utility Functions ---
 server_ip() { curl -4 -s --max-time 2 ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}'; }
@@ -1171,8 +1197,133 @@ server_status() {
 }
 pause_return() { echo; read -rp "Press ENTER to return... " _; }
 
-# --- XRAY MANAGEMENT FUNCTIONS ---
+# --- HYSTERIA MANAGEMENT FUNCTIONS ---
+add_hysteria() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}CREATE HYSTERIA USER${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    read -rp " Enter Password/Auth String: " new_pass
+    
+    if grep -qw "^$new_pass" "$HYST_USER_DB" 2>/dev/null || jq -e ".inbounds[0].users[] | select(.auth_str == \"$new_pass\")" "$HYST_CONFIG" >/dev/null; then
+        echo -e "\n${RED}Error: User/Password already exists!${NC}"
+        pause_return; return
+    fi
 
+    read -rp " Validity (Days): " days
+    if ! [[ "$days" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid number.${NC}"; pause_return; return; fi
+    
+    exp_date=$(date -d "+${days} days" +"%Y-%m-%d")
+    
+    jq ".inbounds[0].users += [{\"auth_str\": \"$new_pass\"}]" "$HYST_CONFIG" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG"
+    echo "$new_pass $exp_date" >> "$HYST_USER_DB"
+    systemctl restart hysteria-server
+    
+    echo -e "\n${GREEN}✔ User created successfully!${NC}"
+    echo -e "${CYAN}--------------------------------------------------------------${NC}"
+    echo -e " ${BOLD}IP:${NC}          ${YELLOW}$(server_ip)${NC}"
+    echo -e " ${BOLD}Domain:${NC}      ${YELLOW}${DOMAIN:-$(server_ip)}${NC}"
+    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}20000-50000 (-> 36712)${NC}"
+    echo -e " ${BOLD}User (Pass):${NC} ${YELLOW}${new_pass}${NC}"
+    echo -e " ${BOLD}Obfs:${NC}        ${YELLOW}$(jq -r '.inbounds[0].obfs' "$HYST_CONFIG" 2>/dev/null || echo "GuruzScript")${NC}"
+    echo -e " ${BOLD}Expiry Date:${NC} ${YELLOW}${exp_date}${NC}"
+    echo -e "${CYAN}--------------------------------------------------------------${NC}"
+    pause_return
+}
+
+del_hysteria() {
+    clear
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}DELETE HYSTERIA USER${NC}"
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+    if [ ! -s "$HYST_USER_DB" ]; then echo -e "No users found."; pause_return; return; fi
+    
+    cat -n "$HYST_USER_DB" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
+    echo ""
+    read -rp " Enter the ID number of the user to delete: " del_id
+    
+    if ! [[ "$del_id" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid ID.${NC}"; pause_return; return; fi
+
+    del_pass=$(sed -n "${del_id}p" "$HYST_USER_DB" | awk '{print $1}')
+    if [ -z "$del_pass" ]; then echo -e "${RED}ID not found.${NC}"; pause_return; return; fi
+
+    jq ".inbounds[0].users |= map(select(.auth_str != \"$del_pass\"))" "$HYST_CONFIG" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG"
+    sed -i "${del_id}d" "$HYST_USER_DB"
+    systemctl restart hysteria-server
+    echo -e "\n${GREEN}✔ User '$del_pass' deleted successfully!${NC}"
+    pause_return
+}
+
+extend_hysteria() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}EXTEND HYSTERIA USER${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    if [ ! -s "$HYST_USER_DB" ]; then echo -e "No users found."; pause_return; return; fi
+
+    cat -n "$HYST_USER_DB" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
+    echo ""
+    read -rp " Enter the ID number of the user to extend: " ext_id
+    
+    if ! [[ "$ext_id" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid ID.${NC}"; pause_return; return; fi
+    
+    ext_pass=$(sed -n "${ext_id}p" "$HYST_USER_DB" | awk '{print $1}')
+    current_exp=$(sed -n "${ext_id}p" "$HYST_USER_DB" | awk '{print $2}')
+
+    if [ -z "$ext_pass" ]; then echo -e "${RED}ID not found.${NC}"; pause_return; return; fi
+    
+    read -rp " Add Validity (Days): " days
+    if ! [[ "$days" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid number.${NC}"; pause_return; return; fi
+    
+    new_exp=$(date -d "$current_exp + $days days" +"%Y-%m-%d")
+    sed -i "${ext_id}s/.*/$ext_pass $new_exp/" "$HYST_USER_DB"
+    
+    echo -e "\n${GREEN}✔ User '$ext_pass' extended successfully!${NC}\n New Expiry: ${YELLOW}$new_exp${NC}"
+    pause_return
+}
+
+list_hysteria() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}HYSTERIA USERS LIST${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+
+    if [ ! -s "$HYST_USER_DB" ]; then echo -e "\n No active users found.\n"
+    else
+        printf " %-5s | %-25s | %-15s\n" "ID" "PASSWORD (AUTH STRING)" "EXPIRY DATE"
+        echo -e "${CYAN}--------------------------------------------------------------${NC}"
+        cat -n "$HYST_USER_DB" | while read -r num user exp; do
+            printf " [%-3s] | %-25s | %-15s\n" "$num" "$user" "$exp"
+        done
+        echo -e "${CYAN}--------------------------------------------------------------${NC}"
+        echo -e " Total Active Users: ${YELLOW}$(wc -l < "$HYST_USER_DB")${NC}"
+    fi
+    pause_return
+}
+
+speed_hysteria() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}EDIT UP/DOWN SPEEDS${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    current_up=$(jq -r '.inbounds[0].up_mbps' "$HYST_CONFIG" 2>/dev/null || echo "100")
+    current_down=$(jq -r '.inbounds[0].down_mbps' "$HYST_CONFIG" 2>/dev/null || echo "100")
+    
+    echo -e " Current Upload:   ${YELLOW}${current_up} Mbps${NC}"
+    echo -e " Current Download: ${YELLOW}${current_down} Mbps${NC}\n"
+    
+    read -rp " Enter New Upload Speed (Mbps): " new_up
+    read -rp " Enter New Download Speed (Mbps): " new_down
+    
+    if [[ "$new_up" =~ ^[0-9]+$ ]] && [[ "$new_down" =~ ^[0-9]+$ ]]; then
+        jq ".inbounds[0].up_mbps = $new_up | .inbounds[0].down_mbps = $new_down" "$HYST_CONFIG" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG"
+        systemctl restart hysteria-server
+        echo -e "\n${GREEN}✔ Speeds updated successfully!${NC}"
+    else echo -e "\n${RED}Invalid input. Numbers only.${NC}"; fi
+    pause_return
+}
+
+# --- XRAY MANAGEMENT FUNCTIONS ---
 add_xray() {
   clear
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
@@ -1192,8 +1343,6 @@ add_xray() {
   read -rp " Validity (Days): " masa
   exp=$(date -d "+${masa} days" +"%Y-%m-%d")
   uuid=$(cat /proc/sys/kernel/random/uuid)
-  
-  # FIX: Define the Trojan password globally so Option 4 can use it!
   pass="Guruz${uuid:0:6}"
   
   if [ "$prot" == "1" ]; then
@@ -1240,10 +1389,8 @@ add_xray() {
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
 
   elif [ "$prot" == "4" ]; then
-    # Inject into ALL Inbounds
     jq ".inbounds[0].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[3].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[4].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[1].settings.clients += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}] | .inbounds[5].settings.clients += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}] | .inbounds[2].settings.clients += [{\"password\": \"$pass\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     
-    # Save to all text files
     echo "$user $uuid $exp" >> /etc/xray/vless.txt
     echo "$user $uuid $exp" >> /etc/xray/vmess.txt
     echo "$user $pass $exp" >> /etc/xray/trojan.txt
@@ -1292,14 +1439,10 @@ renew_xray() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to renew: " user
   
-  # Check if user exists in ANY file
   if ! grep -qw "^$user" /etc/xray/vless.txt /etc/xray/vmess.txt /etc/xray/trojan.txt 2>/dev/null; then 
     echo -e "${RED}User not found.${NC}"; pause_return; return
   fi
-  
   read -rp " Add Validity (Days): " days
-  
-  # Loop through all protocol files and update them if the user exists
   for proto in vless vmess trojan; do 
     if grep -qw "^$user" "/etc/xray/${proto}.txt"; then
       current_exp=$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $3}')
@@ -1307,7 +1450,6 @@ renew_xray() {
       sed -i "s/^$user .* $current_exp/$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $1 " " $2}') $new_exp/" "/etc/xray/${proto}.txt"
     fi
   done
-  
   echo -e "\n${GREEN}✔ User '$user' renewed successfully.${NC}\nNew Expiry: $new_exp"
   pause_return
 }
@@ -1318,16 +1460,13 @@ show_xray() {
   echo -e "                   ${BOLD}SHOW XRAY CONFIG LINKS${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to view: " user
-  
   local found=0
-
   if grep -qw "^$user" /etc/xray/vless.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
     echo -e "${YELLOW}VLESS TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
     echo -e "\n${YELLOW}VLESS NTLS (80):${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}\n"
     found=1
   fi
-  
   if grep -qw "^$user" /etc/xray/vmess.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vmess.txt | awk '{print $2}')
     VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
@@ -1336,16 +1475,12 @@ show_xray() {
     echo -e "\n${YELLOW}VMESS NTLS (80):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)\n"
     found=1
   fi
-  
   if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
     echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
     found=1
   fi
-
-  if [ "$found" -eq 0 ]; then
-    echo -e "${RED}User not found in any protocol.${NC}"
-  fi
+  if [ "$found" -eq 0 ]; then echo -e "${RED}User not found in any protocol.${NC}"; fi
   pause_return
 }
 
@@ -1446,57 +1581,52 @@ online_users() {
 
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
   declare -A active_ssh
+  mapfile -t USERS < <(list_real_users)
   
-  # 1. Grab all active SSH/Dropbear PIDs from established network sockets
-  pids=$(ss -tnp 2>/dev/null | grep -iE 'sshd|dropbear' | grep 'ESTAB' | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)
-  
-  # 2. Cross-reference the PID with the authentication log to find the exact username
-  for pid in $pids; do
-      # This looks directly into the auth log for the exact moment that PID successfully logged in
-      user=$(grep "\[$pid\]" /var/log/auth.log 2>/dev/null | grep -E "Accepted|auth succeeded" | awk '{for(i=1;i<=NF;i++) if($i=="for") print $(i+1)}' | tr -d "'" | head -n 1)
-      
-      # If a username is found attached to that active PID, count the session! (ignoring root)
-      if [[ -n "$user" && "$user" != "root" ]]; then
-          active_ssh["$user"]=$((active_ssh["$user"] + 1))
+  for user in "${USERS[@]}"; do
+      count=$(ps -u "$user" -o comm= 2>/dev/null | grep -iE '^(sshd|dropbear)$' | wc -l)
+      if [ "$count" -gt 0 ]; then
+          active_ssh["$user"]=$count
       fi
   done
 
   if [ "${#active_ssh[@]}" -eq 0 ]; then 
-    echo -e "  No authenticated legacy users are currently online.\n"
+      echo -e "  No authenticated legacy users are currently online.\n"
   else
     printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
     echo -e "${CYAN}  ----------------------------------------------------------${NC}"
     for user in "${!active_ssh[@]}"; do 
-      printf "  %-25s %-15s\n" "$user" "${active_ssh[$user]}"
+        printf "  %-25s %-15s\n" "$user" "${active_ssh[$user]}"
     done | sort
     echo
   fi
 
-  echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent 500 Connections) ---${NC}"
-  
-  # 3. FIX FOR XRAY: If loglevel is set to 'warning', Xray won't log connections. 
-  # This automatically fixes the config and restarts Xray so it starts tracking.
+  echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent Unique IPs) ---${NC}"
   if grep -q '"loglevel": "warning"' /etc/xray/config.json 2>/dev/null; then
       sed -i 's/"loglevel": "warning"/"loglevel": "info"/g' /etc/xray/config.json
       systemctl restart xray 2>/dev/null
       echo -e "  [System Note] Xray logging was just enabled. Reconnect your Xray user to see them here.\n"
   elif [ -f /var/log/xray/access.log ]; then
-    active_xray=$(grep "accepted" /var/log/xray/access.log 2>/dev/null | tail -n 500 | grep -oE 'email: [^ ]+' | awk '{print $2}' | sort | uniq -c | sort -nr)
-    if [ -z "$active_xray" ]; then
-      echo -e "  No active Xray users found in recent logs.\n"
+    active_xray=$(tail -n 10000 /var/log/xray/access.log 2>/dev/null | grep "accepted" | awk '{
+        user=""
+        for(i=1;i<=NF;i++) if($i=="email:") user=$(i+1)
+        if(user!="") { split($3, a, ":"); print user " " a[1] }
+    }' | sort -u | awk '{print $1}' | uniq -c | sort -nr)
+
+    if [ -z "$active_xray" ]; then 
+        echo -e "  No active Xray users found in recent logs.\n"
     else
-      printf "  %-15s %-25s\n" "CONNECTIONS" "USERNAME"
+      printf "  %-15s %-25s\n" "UNIQUE IPs" "USERNAME"
       echo -e "${CYAN}  ----------------------------------------------------------${NC}"
-      while read -r count username; do
-         if [ -n "$username" ]; then
-           printf "  %-15s %-25s\n" "$count" "$username"
+      while read -r count username; do 
+         if [ -n "$username" ]; then 
+             printf "  %-15s %-25s\n" "$count" "$username"
          fi
       done <<< "$active_xray"
     fi
-  else
-    echo -e "  Xray access log not found.\n"
+  else 
+      echo -e "  Xray access log not found.\n"
   fi
-  
   echo
   pause_return
 }
@@ -1596,11 +1726,28 @@ advanced_menu() {
           6) journalctl -u xray -n 50 --no-pager ;;
         esac; pause_return ;;
       3|03) 
-        clear; echo -e "  [1] Install BBR\n  [2] Check Netflix\n  [0] Back"
+        clear; echo -e "  [1] Enable Native BBR (Fast & Silent)\n  [2] Check Netflix & Streaming (English)\n  [0] Back"
         read -rp " Select: " subopt
         case "$subopt" in 
-          1) wget -N --no-check-certificate "https://raw.githubusercontent.com/chiakge/Linux-NetSpeed/master/tcp.sh" && chmod +x tcp.sh && ./tcp.sh; pause_return;; 
-          2) [ ! -f /usr/local/bin/nf ] && wget -qO /usr/local/bin/nf https://github.com/sjlleo/netflix-verify/releases/download/v3.1.0/nf_linux_amd64 && chmod +x /usr/local/bin/nf; /usr/local/bin/nf; pause_return;; 
+          1) 
+             echo -e "\nEnabling Native Kernel BBR..."
+             sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+             sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+             echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+             echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+             sysctl -p >/dev/null 2>&1
+             if [[ "$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null)" == *"bbr"* ]]; then
+                 echo -e "${GREEN}✔ BBR Successfully Enabled!${NC}"
+             else
+                 echo -e "${RED}✖ Failed to enable BBR (Kernel might not support it).${NC}"
+             fi
+             pause_return
+             ;; 
+          2) 
+             echo -e "\nFetching Streaming Status..."
+             bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -E
+             pause_return
+             ;; 
         esac ;;
       4|04) remove_script ;;
       0|00) break ;;
@@ -1622,8 +1769,8 @@ remove_script() {
       systemctl disable ws-proxy@* server-sldns badvpn hysteria-server xray 2>/dev/null || true
       echo "Deleting files..."
       rm -f /etc/systemd/system/ws-proxy@.service /etc/systemd/system/server-sldns.service /etc/systemd/system/badvpn.service /etc/systemd/system/xray.service
-      rm -f /etc/cron.d/service-checker /etc/cron.d/logrotate /etc/cron.d/xray-expiry /etc/sysctl.d/99-freenet-tuning.conf /etc/security/limits.d/99-freenet.conf
-      rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /usr/local/bin/menu /usr/bin/menu /usr/bin/Menu
+      rm -f /etc/cron.d/service-checker /etc/cron.d/logrotate /etc/cron.d/xray-expiry /etc/cron.d/hysteria-expiry /etc/sysctl.d/99-freenet-tuning.conf /etc/security/limits.d/99-freenet.conf
+      rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /etc/hysteria /usr/local/bin/menu /usr/bin/menu /usr/bin/Menu
       systemctl daemon-reload; sysctl --system >/dev/null 2>&1 || true
       echo -e "${GREEN}✔ Removal complete.${NC}"
   else echo "Cancelled."; fi
@@ -1655,11 +1802,12 @@ while true; do
   clear; draw_header; echo
   echo -e "  [${YELLOW}01${NC}] SSH Account Management (Legacy)"
   echo -e "  [${YELLOW}02${NC}] Xray Account Management (V2ray)"
-  echo -e "  [${YELLOW}03${NC}] Monitor Active Connections"
-  echo -e "  [${YELLOW}04${NC}] Service Controls (Restart Protocols)"
-  echo -e "  [${YELLOW}05${NC}] Backup & Restore Data"
-  echo -e "  [${YELLOW}06${NC}] Advanced Settings & Utilities"
-  echo -e "  [${YELLOW}07${NC}] Reboot Server"
+  echo -e "  [${YELLOW}03${NC}] Hysteria Account Management (UDP)"
+  echo -e "  [${YELLOW}04${NC}] Monitor Active Connections"
+  echo -e "  [${YELLOW}05${NC}] Service Controls (Restart Protocols)"
+  echo -e "  [${YELLOW}06${NC}] Backup & Restore Data"
+  echo -e "  [${YELLOW}07${NC}] Advanced Settings & Utilities"
+  echo -e "  [${YELLOW}08${NC}] Reboot Server"
   echo -e "  [${RED}00${NC}] Exit\n"
   read -rp "  ► Select an option: " opt
   case "$opt" in
@@ -1675,13 +1823,19 @@ while true; do
         echo -e "  [${YELLOW}1${NC}] Add Xray Account\n  [${YELLOW}2${NC}] Renew Xray Account\n  [${YELLOW}3${NC}] Delete Xray Account\n  [${YELLOW}4${NC}] Show Config Links\n  [${YELLOW}5${NC}] Force Delete Expired Xray Users Now\n  [${YELLOW}6${NC}] Update Xray Core Version\n  [${YELLOW}0${NC}] Back\n"
         read -rp "  ► Option: " sub; case "$sub" in 1) add_xray;; 2) renew_xray;; 3) del_xray;; 4) show_xray;; 5) /usr/local/bin/exp-check; echo "Expired Xray users wiped."; pause_return;; 6) systemctl stop xray; wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"; unzip -q -o /tmp/xray.zip -d /tmp/xray/ && mv -f /tmp/xray/xray /usr/local/bin/xray; systemctl start xray; echo -e "${GREEN}✔ Xray Updated!${NC}"; pause_return;; 0) break;; esac
       done ;;
-    3|03) online_users ;;
-    4|04) service_control_menu ;;
-    5|05)
+    3|03)
+      while true; do
+        clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}HYSTERIA ACCOUNT MANAGEMENT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "  [${YELLOW}1${NC}] Add Hysteria Account\n  [${YELLOW}2${NC}] Renew Hysteria Account\n  [${YELLOW}3${NC}] Delete Hysteria Account\n  [${YELLOW}4${NC}] List All Accounts\n  [${YELLOW}5${NC}] Edit Up/Down Speeds\n  [${YELLOW}0${NC}] Back\n"
+        read -rp "  ► Option: " sub; case "$sub" in 1) add_hysteria;; 2) extend_hysteria;; 3) del_hysteria;; 4) list_hysteria;; 5) speed_hysteria;; 0) break;; esac
+      done ;;
+    4|04) online_users ;;
+    5|05) service_control_menu ;;
+    6|06)
       clear; echo -e "  [1] Backup System Configs\n  [2] Restore From Backup\n  [0] Back"
       read -rp " Select: " subopt; case "$subopt" in 1) backup_snapshot;; 2) restore_snapshot;; esac ;;
-    6|06) advanced_menu ;;
-    7|07) clear; read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
+    7|07) advanced_menu ;;
+    8|08) clear; read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
     0|00) clear; exit 0 ;;
   esac
 done
