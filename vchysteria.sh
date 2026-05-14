@@ -469,17 +469,26 @@ edit_speed() {
 uninstall_hysteria() {
     clear
     echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "                   ${BOLD}UNINSTALL HYSTERIA${NC}"
+    echo -e "                   ${BOLD}UNINSTALL HYSTERIA & WARP${NC}"
     echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
     read -rp " Are you absolutely sure? [y/N]: " ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
+        # 1. Stop and remove Hysteria
         systemctl stop hysteria-server hysteria-nat 2>/dev/null || true
         systemctl disable hysteria-server hysteria-nat 2>/dev/null || true
         rm -rf /etc/hysteria
         rm -f /etc/systemd/system/hysteria-server.service /etc/systemd/system/hysteria-nat.service
         rm -f /etc/cron.d/hysteria-expiry
+        
+        # 2. Stop, unregister, and purge Cloudflare WARP
+        echo -e "\n Removing Cloudflare WARP..."
+        warp-cli --accept-tos disconnect 2>/dev/null || true
+        warp-cli --accept-tos registration delete 2>/dev/null || true
+        apt-get remove --purge -y cloudflare-warp 2>/dev/null || true
+        rm -f /etc/apt/sources.list.d/cloudflare-client.list
+        
         systemctl daemon-reload
-        echo -e "\n${GREEN}✔ Hysteria completely removed.${NC}"
+        echo -e "\n${GREEN}✔ Hysteria and WARP completely removed.${NC}"
         rm -f /usr/local/bin/vc
         exit 0
     fi
