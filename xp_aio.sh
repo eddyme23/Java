@@ -1699,6 +1699,43 @@ restore_snapshot() {
   pause_return
 }
 
+# --- System Utilities ---
+utilities_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}SYSTEM UTILITIES${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  [${YELLOW}1${NC}] Enable Native Kernel BBR (Fast & Silent)"
+    echo -e "  [${YELLOW}2${NC}] Check Netflix & Streaming Unlocks (English)"
+    echo -e "  [${YELLOW}0${NC}] Back\n"
+    read -rp "  Select an option: " subopt
+    case "$subopt" in 
+      1) 
+         echo -e "\nEnabling Native Kernel BBR..."
+         sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+         sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+         echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+         echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+         sysctl -p >/dev/null 2>&1
+         if [[ "$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null)" == *"bbr"* ]]; then
+             echo -e "${GREEN}✔ BBR Successfully Enabled!${NC}"
+         else
+             echo -e "${RED}✖ Failed to enable BBR (Kernel might not support it).${NC}"
+         fi
+         pause_return
+         ;; 
+      2) 
+         echo -e "\nFetching Streaming Status..."
+         bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -E
+         pause_return
+         ;; 
+      0) break ;;
+      *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
+    esac
+  done
+}
+
 # --- Advanced / Danger Zone ---
 advanced_menu() {
   while true; do
@@ -1708,8 +1745,7 @@ advanced_menu() {
     echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
     echo -e "  [${YELLOW}01${NC}] View Raw Hysteria JSON"
     echo -e "  [${YELLOW}02${NC}] View Service Action Logs (Journalctl)"
-    echo -e "  [${YELLOW}03${NC}] Install System Utilities (BBR & Netflix)"
-    echo -e "  [${RED}04${NC}] Full Script Uninstall (Danger)"
+    echo -e "  [${RED}03${NC}] Full Script Uninstall (Danger)"
     echo -e "  [${YELLOW}00${NC}] Back\n"
     read -rp "  Select an option: " opt
     case "$opt" in
@@ -1725,31 +1761,7 @@ advanced_menu() {
           5) journalctl -u server-sldns -n 50 --no-pager ;;
           6) journalctl -u xray -n 50 --no-pager ;;
         esac; pause_return ;;
-      3|03) 
-        clear; echo -e "  [1] Enable Native BBR (Fast & Silent)\n  [2] Check Netflix & Streaming (English)\n  [0] Back"
-        read -rp " Select: " subopt
-        case "$subopt" in 
-          1) 
-             echo -e "\nEnabling Native Kernel BBR..."
-             sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-             sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-             echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-             echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-             sysctl -p >/dev/null 2>&1
-             if [[ "$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null)" == *"bbr"* ]]; then
-                 echo -e "${GREEN}✔ BBR Successfully Enabled!${NC}"
-             else
-                 echo -e "${RED}✖ Failed to enable BBR (Kernel might not support it).${NC}"
-             fi
-             pause_return
-             ;; 
-          2) 
-             echo -e "\nFetching Streaming Status..."
-             bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -E
-             pause_return
-             ;; 
-        esac ;;
-      4|04) remove_script ;;
+      3|03) remove_script ;;
       0|00) break ;;
     esac
   done
@@ -1806,8 +1818,9 @@ while true; do
   echo -e "  [${YELLOW}04${NC}] Monitor Active Connections"
   echo -e "  [${YELLOW}05${NC}] Service Controls (Restart Protocols)"
   echo -e "  [${YELLOW}06${NC}] Backup & Restore Data"
-  echo -e "  [${YELLOW}07${NC}] Advanced Settings & Utilities"
-  echo -e "  [${YELLOW}08${NC}] Reboot Server"
+  echo -e "  [${YELLOW}07${NC}] System Utilities (BBR & Netflix)"
+  echo -e "  [${YELLOW}08${NC}] Advanced Settings"
+  echo -e "  [${YELLOW}09${NC}] Reboot Server"
   echo -e "  [${RED}00${NC}] Exit\n"
   read -rp "  ► Select an option: " opt
   case "$opt" in
@@ -1834,8 +1847,9 @@ while true; do
     6|06)
       clear; echo -e "  [1] Backup System Configs\n  [2] Restore From Backup\n  [0] Back"
       read -rp " Select: " subopt; case "$subopt" in 1) backup_snapshot;; 2) restore_snapshot;; esac ;;
-    7|07) advanced_menu ;;
-    8|08) clear; read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
+    7|07) utilities_menu ;;
+    8|08) advanced_menu ;;
+    9|09) clear; read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
     0|00) clear; exit 0 ;;
   esac
 done
