@@ -1732,8 +1732,26 @@ utilities_menu() {
          pause_return
          ;; 
       2) 
-         echo -e "\nFetching Streaming Status..."
-         bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -E
+         clear
+         echo -e "\n${CYAN}Fetching Streaming Status (Translating to English in real-time)...${NC}\n"
+         bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -M 0 | sed -E \
+            -e 's/解锁/Unlocked/g' \
+            -e 's/未解锁/Blocked/g' \
+            -e 's/失败/Failed/g' \
+            -e 's/不支持/Not Supported/g' \
+            -e 's/支持/Supported/g' \
+            -e 's/仅限自制剧/Originals Only/g' \
+            -e 's/原生IP/Native IP/g' \
+            -e 's/广播IP/Broadcast IP/g' \
+            -e 's/跨国平台/Global Platforms/g' \
+            -e 's/测试时间/Test Time/g' \
+            -e 's/正在测试/Testing/g' \
+            -e 's/测试/Test/g' \
+            -e 's/版本/Version/g' \
+            -e 's/项目地址/Project URL/g' \
+            -e 's/或者/or/g' \
+            -e 's/跳过/Skipped/g'
+         echo ""
          pause_return
          ;; 
       0) break ;;
@@ -1877,7 +1895,7 @@ while true; do
   echo -e "  [${YELLOW}05${NC}] Service Controls (Restart Protocols)"
   echo -e "  [${YELLOW}06${NC}] Backup & Restore Data"
   echo -e "  [${YELLOW}07${NC}] System Utilities (BBR & Netflix)"
-  echo -e "  [${YELLOW}08${NC}] Advanced Settings"
+  echo -e "  [${YELLOW}08${NC}] Advanced Settings (Domain / Nameserver)"
   echo -e "  [${YELLOW}09${NC}] Reboot Server"
   echo -e "  [${RED}00${NC}] Exit\n"
   read -rp "  ► Select an option: " opt
@@ -1913,6 +1931,7 @@ while true; do
 done
 EOF_MENU
 
+sed -i "s|DOMAIN_PLACEHOLDER|$DOMAIN|g" /usr/local/bin/menu
 chmod +x /usr/local/bin/menu
 cp /usr/local/bin/menu /usr/bin/menu
 cp /usr/local/bin/menu /usr/bin/Menu
