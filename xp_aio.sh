@@ -144,6 +144,10 @@ NGINX_SERVICE="nginx"
 SFTP_SUBSYSTEM="internal-sftp"
 
 mkdir -p /etc/dropbear /etc/stunnel /etc/nginx/conf.d /etc/deekayvpn /var/run/sslh /etc/xray
+
+# Save domain centrally
+echo "$DOMAIN" > /etc/deekayvpn/domain.txt
+
 ssh-keygen -A >/dev/null 2>&1 || true
 
 command -v ss >/dev/null 2>&1 || apt-get install -y iproute2
@@ -1173,7 +1177,9 @@ MAGENTA='\033[1;35m'
 WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 BOLD='\033[1m'
-DOMAIN=$(grep '"add"' /etc/xray/config.json 2>/dev/null | grep -o 'add":"[^"]*' | cut -d'"' -f3 | head -1)
+
+# Dynamically fetch domain
+DOMAIN=$(cat /etc/deekayvpn/domain.txt 2>/dev/null || curl -4 -s --max-time 2 ipv4.icanhazip.com)
 
 HYST_CONFIG="/etc/hysteria/config.json"
 HYST_USER_DB="/etc/hysteria/users.txt"
@@ -1736,6 +1742,54 @@ utilities_menu() {
   done
 }
 
+# --- Domain & DNS Management ---
+change_domain() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}CHANGE SERVER DOMAIN${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    current_dom=$(cat /etc/deekayvpn/domain.txt 2>/dev/null || echo "Not Set")
+    echo -e " Current Domain/IP: ${YELLOW}$current_dom${NC}\n"
+    read -rp " Enter New Domain or IP: " new_dom
+    if [ -n "$new_dom" ]; then
+        echo "$new_dom" > /etc/deekayvpn/domain.txt
+        DOMAIN="$new_dom"
+        echo -e "\n${GREEN}✔ Domain successfully updated to: $new_dom${NC}"
+        echo -e "${YELLOW}Note: This changes the domain used for generating NEW config links.${NC}"
+    else
+        echo -e "\n${RED}Action cancelled.${NC}"
+    fi
+    pause_return
+}
+
+change_slowdns() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "               ${BOLD}CHANGE SLOWDNS NAMESERVER${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    
+    svc_file="/etc/systemd/system/server-sldns.service"
+    if [ ! -f "$svc_file" ]; then
+        echo -e "${RED}SlowDNS service file not found.${NC}"; pause_return; return
+    fi
+    
+    current_ns=$(grep 'ExecStart=' "$svc_file" | sed 's/.*server\.key \([^ ]*\) .*/\1/')
+    
+    echo -e " Current Nameserver: ${YELLOW}$current_ns${NC}\n"
+    read -rp " Enter New Nameserver (e.g., ns1.domain.com): " new_ns
+    
+    if [ -n "$new_ns" ] && [ "$new_ns" != "$current_ns" ]; then
+        sed -i "s/$current_ns/$new_ns/g" "$svc_file"
+        systemctl daemon-reload
+        systemctl restart server-sldns
+        echo -e "\n${GREEN}✔ SlowDNS Nameserver updated to: $new_ns${NC}"
+        echo -e "Service has been automatically restarted."
+    else
+        echo -e "\n${RED}Action cancelled or identical NS entered.${NC}"
+    fi
+    pause_return
+}
+
 # --- Advanced / Danger Zone ---
 advanced_menu() {
   while true; do
@@ -1745,7 +1799,9 @@ advanced_menu() {
     echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
     echo -e "  [${YELLOW}01${NC}] View Raw Hysteria JSON"
     echo -e "  [${YELLOW}02${NC}] View Service Action Logs (Journalctl)"
-    echo -e "  [${RED}03${NC}] Full Script Uninstall (Danger)"
+    echo -e "  [${YELLOW}03${NC}] Change Server Domain/IP"
+    echo -e "  [${YELLOW}04${NC}] Change SlowDNS Nameserver (NS)"
+    echo -e "  [${RED}05${NC}] Full Script Uninstall (Danger)"
     echo -e "  [${YELLOW}00${NC}] Back\n"
     read -rp "  Select an option: " opt
     case "$opt" in
@@ -1761,7 +1817,9 @@ advanced_menu() {
           5) journalctl -u server-sldns -n 50 --no-pager ;;
           6) journalctl -u xray -n 50 --no-pager ;;
         esac; pause_return ;;
-      3|03) remove_script ;;
+      3|03) change_domain ;;
+      4|04) change_slowdns ;;
+      5|05) remove_script ;;
       0|00) break ;;
     esac
   done
@@ -1855,7 +1913,6 @@ while true; do
 done
 EOF_MENU
 
-sed -i "s|DOMAIN_PLACEHOLDER|$DOMAIN|g" /usr/local/bin/menu
 chmod +x /usr/local/bin/menu
 cp /usr/local/bin/menu /usr/bin/menu
 cp /usr/local/bin/menu /usr/bin/Menu
