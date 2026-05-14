@@ -350,17 +350,35 @@ del_user() {
     echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
     
     if [ ! -s "$USER_DB" ]; then echo -e "No users found."; pause_return; return; fi
+    
+    # Display users with IDs
     cat -n "$USER_DB" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
     echo ""
-    read -rp " Enter Password to delete (or type exactly): " del_pass
+    read -rp " Enter the ID number of the user to delete: " del_id
     
+    # Validate input is a number
+    if ! [[ "$del_id" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Invalid ID. Please enter a number.${NC}"
+        pause_return; return
+    fi
+
+    # Extract the password matching that ID
+    del_pass=$(sed -n "${del_id}p" "$USER_DB" | awk '{print $1}')
+    
+    if [ -z "$del_pass" ]; then
+        echo -e "${RED}User ID not found.${NC}"
+        pause_return; return
+    fi
+
     # Remove from JSON
     jq ".inbounds[0].users |= map(select(.auth_str != \"$del_pass\"))" "$CONFIG" > /tmp/h.json && mv /tmp/h.json "$CONFIG"
-    # Remove from DB
-    sed -i "/^$del_pass /d" "$USER_DB"
+    
+    # Remove exact line from DB securely
+    sed -i "${del_id}d" "$USER_DB"
+    
     systemctl restart hysteria-server
     
-    echo -e "\n${GREEN}✔ User deleted successfully!${NC}"
+    echo -e "\n${GREEN}✔ User '$del_pass' deleted successfully!${NC}"
     pause_return
 }
 
@@ -370,24 +388,57 @@ extend_user() {
     echo -e "                 ${BOLD}EXTEND HYSTERIA USER${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     
+    if [ ! -s "$USER_DB" ]; then echo -e "No users found."; pause_return; return; fi
+
+    # Display users with IDs
     cat -n "$USER_DB" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
     echo ""
-    read -rp " Enter Password to extend: " ext_pass
+    read -rp " Enter the ID number of the user to extend: " ext_id
     
-    if ! grep -qw "^$ext_pass" "$USER_DB"; then
-        echo -e "${RED}User not found in database.${NC}"
+    if ! [[ "$ext_id" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Invalid ID. Please enter a number.${NC}"
+        pause_return; return
+    fi
+    
+    # Extract password and current expiry
+    ext_pass=$(sed -n "${ext_id}p" "$USER_DB" | awk '{print $1}')
+    current_exp=$(sed -n "${ext_id}p" "$USER_DB" | awk '{print $2}')
+
+    if [ -z "$ext_pass" ]; then
+        echo -e "${RED}User ID not found.${NC}"
         pause_return; return
     fi
     
     read -rp " Add Validity (Days): " days
     if ! [[ "$days" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid number.${NC}"; pause_return; return; fi
     
-    current_exp=$(grep -w "^$ext_pass" "$USER_DB" | awk '{print $2}')
     new_exp=$(date -d "$current_exp + $days days" +"%Y-%m-%d")
-    sed -i "s/^$ext_pass $current_exp/$ext_pass $new_exp/" "$USER_DB"
     
-    echo -e "\n${GREEN}✔ User extended successfully!${NC}"
+    # Update the specific line in the DB securely
+    sed -i "${ext_id}s/.*/$ext_pass $new_exp/" "$USER_DB"
+    
+    echo -e "\n${GREEN}✔ User '$ext_pass' extended successfully!${NC}"
     echo -e " New Expiry: ${YELLOW}$new_exp${NC}"
+    pause_return
+}
+
+list_users() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}HYSTERIA USERS LIST${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+
+    if [ ! -s "$USER_DB" ]; then
+        echo -e "\n No active users found.\n"
+    else
+        printf " %-5s | %-25s | %-15s\n" "ID" "PASSWORD (AUTH STRING)" "EXPIRY DATE"
+        echo -e "${CYAN}--------------------------------------------------------------${NC}"
+        cat -n "$USER_DB" | while read -r num user exp; do
+            printf " [%-3s] | %-25s | %-15s\n" "$num" "$user" "$exp"
+        done
+        echo -e "${CYAN}--------------------------------------------------------------${NC}"
+        echo -e " Total Active Users: ${YELLOW}$(wc -l < "$USER_DB")${NC}"
+    fi
     pause_return
 }
 
@@ -439,10 +490,10 @@ draw_header() {
     echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}        >>>>>  🐉  ${YELLOW}${BOLD}Guruz GH Hysteria Menu${NC}${BLUE}  🐉  <<<<<${NC}"
     echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "  ${WHITE}IP:${NC} ${YELLOW}${ip}${NC}    ${WHITE}Domain:${NC} ${YELLOW}${MY_DOMAIN}${NC}"
-    echo -e "  ${WHITE}OS:${NC} ${YELLOW}$(get_os)${NC}   ${WHITE}Arch:${NC} ${YELLOW}$(get_arch)${NC}   ${WHITE}Cores:${NC} ${YELLOW}$(get_cores)${NC}"
-    echo -e "  ${WHITE}Time:${NC} ${YELLOW}$(get_time)${NC}       ${WHITE}Status:${NC} $(check_status)"
-    echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(get_ram)${NC}       ${WHITE}Buffer:${NC} ${YELLOW}$(get_buffer)${NC}"
+    echo -e "  ${WHITE}IP:${NC} ${YELLOW}${ip}${NC}      ${WHITE}Domain:${NC} ${YELLOW}${MY_DOMAIN}${NC}"
+    echo -e "  ${WHITE}OS:${NC} ${YELLOW}$(get_os)${NC}      ${WHITE}Arch:${NC} ${YELLOW}$(get_arch)${NC}   ${WHITE}Cores:${NC} ${YELLOW}$(get_cores)${NC}"
+    echo -e "  ${WHITE}Time:${NC} ${YELLOW}$(get_time)${NC}      ${WHITE}Status:${NC} $(check_status)"
+    echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(get_ram)${NC}      ${WHITE}Buffer:${NC} ${YELLOW}$(get_buffer)${NC}"
     echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
 }
 
@@ -453,10 +504,11 @@ while true; do
     echo -e "  [${YELLOW}1${NC}] Create User"
     echo -e "  [${YELLOW}2${NC}] Delete User"
     echo -e "  [${YELLOW}3${NC}] Extend User"
-    echo -e "  [${YELLOW}4${NC}] Edit Up/Down Speeds"
-    echo -e "  [${YELLOW}5${NC}] Restart Hysteria Service"
-    echo -e "  [${RED}6${NC}] Uninstall Hysteria"
-    echo -e "  [${RED}7${NC}] Reboot Server"
+    echo -e "  [${YELLOW}4${NC}] List All Users"
+    echo -e "  [${YELLOW}5${NC}] Edit Up/Down Speeds"
+    echo -e "  [${YELLOW}6${NC}] Restart Hysteria Service"
+    echo -e "  [${RED}7${NC}] Uninstall Hysteria"
+    echo -e "  [${RED}8${NC}] Reboot Server"
     echo -e "  [${YELLOW}0${NC}] Exit\n"
     read -rp "  ► Select an option: " opt
 
@@ -464,10 +516,11 @@ while true; do
         1) add_user ;;
         2) del_user ;;
         3) extend_user ;;
-        4) edit_speed ;;
-        5) systemctl restart hysteria-server; echo -e "${GREEN}✔ Service Restarted!${NC}"; sleep 1 ;;
-        6) uninstall_hysteria ;;
-        7) read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
+        4) list_users ;;
+        5) edit_speed ;;
+        6) systemctl restart hysteria-server; echo -e "${GREEN}✔ Service Restarted!${NC}"; sleep 1 ;;
+        7) uninstall_hysteria ;;
+        8) read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
         0) clear; exit 0 ;;
         *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
     esac
