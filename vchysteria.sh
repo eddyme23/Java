@@ -499,10 +499,10 @@ draw_header() {
     echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}        >>>>>  🐉  ${YELLOW}${BOLD}Guruz GH Hysteria Menu${NC}${BLUE}  🐉  <<<<<${NC}"
     echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "  ${WHITE}IP:${NC} ${YELLOW}${ip}${NC}      ${WHITE}Domain:${NC} ${YELLOW}${MY_DOMAIN}${NC}"
-    echo -e "  ${WHITE}OS:${NC} ${YELLOW}$(get_os)${NC}      ${WHITE}Arch:${NC} ${YELLOW}$(get_arch)${NC}   ${WHITE}Cores:${NC} ${YELLOW}$(get_cores)${NC}"
+    echo -e "  ${WHITE}IP:${NC} ${YELLOW}${ip}${NC}              ${WHITE}Domain:${NC} ${YELLOW}${MY_DOMAIN}${NC}"
+    echo -e "  ${WHITE}OS:${NC} ${YELLOW}$(get_os)${NC}          ${WHITE}Arch:${NC} ${YELLOW}$(get_arch)${NC}   ${WHITE}Cores:${NC} ${YELLOW}$(get_cores)${NC}"
     echo -e "  ${WHITE}Time:${NC} ${YELLOW}$(get_time)${NC}      ${WHITE}Status:${NC} $(check_status)"
-    echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(get_ram)${NC}      ${WHITE}Buffer:${NC} ${YELLOW}$(get_buffer)${NC}"
+    echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(get_ram)${NC}   ${WHITE}Buffer:${NC} ${YELLOW}$(get_buffer)${NC}"
     echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
 }
 
