@@ -792,11 +792,22 @@ echo "*/5 * * * * root /usr/sbin/logrotate -v -f /etc/logrotate.d/rsyslog >/dev/
 # NEW CRONJOB: Drop Cache (Clears RAM without dropping connections)
 echo "0 3 * * * root sync; echo 3 > /proc/sys/vm/drop_caches" > /etc/cron.d/drop-cache
 
-# Aggressive High-concurrency tuning for massive user loads
+# ==========================================
+# AGGRESSIVE SYSTEM & CONNTRACK TUNING
+# ==========================================
+# Force load nf_conntrack module
+modprobe nf_conntrack 2>/dev/null || true
+echo "nf_conntrack" > /etc/modules-load.d/freenet.conf
+
 cat <<'SYSCTL' > /etc/sysctl.d/99-freenet-tuning.conf
+# File Descriptors
 fs.file-max = 1048576
+
+# Network Core
 net.core.somaxconn = 65535
 net.core.netdev_max_backlog = 16384
+
+# TCP Settings
 net.ipv4.ip_local_port_range = 1024 65000
 net.ipv4.tcp_max_syn_backlog = 8192
 net.ipv4.tcp_fin_timeout = 15
@@ -804,6 +815,15 @@ net.ipv4.tcp_tw_reuse = 1
 net.ipv4.tcp_keepalive_time = 600
 net.ipv4.tcp_keepalive_intvl = 60
 net.ipv4.tcp_keepalive_probes = 10
+
+# SOCKS / WARP Local Loopback Optimization
+net.ipv4.tcp_window_scaling = 1
+net.ipv4.tcp_mtu_probing = 1
+
+# Connection Tracking Limits (Prevents silent drops)
+net.netfilter.nf_conntrack_max = 2097152
+net.netfilter.nf_conntrack_tcp_timeout_established = 1200
+net.netfilter.nf_conntrack_udp_timeout = 60
 SYSCTL
 sysctl --system || true
 
