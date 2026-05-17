@@ -35,6 +35,57 @@ echo "Installing dependencies..."
 apt-get update -y
 apt-get install -y curl jq iptables iptables-persistent netfilter-persistent gnupg2 lsb-release cron
 
+# Setup Hysteria Directory Early
+mkdir -p /etc/hysteria
+echo "$DOMAIN" > /etc/hysteria/domain.txt
+
+# ==========================================
+# AGGRESSIVE SYSTEM & CONNTRACK TUNING
+# ==========================================
+echo "Applying Aggressive System & Conntrack Tuning..."
+modprobe nf_conntrack 2>/dev/null || true
+echo "nf_conntrack" > /etc/modules-load.d/freenet.conf
+
+cat <<'SYSCTL' > /etc/sysctl.d/99-freenet-tuning.conf
+# File Descriptors
+fs.file-max = 1048576
+
+# Network Core
+net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 16384
+
+# TCP Settings
+net.ipv4.ip_local_port_range = 1024 65000
+net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_keepalive_time = 600
+net.ipv4.tcp_keepalive_intvl = 60
+net.ipv4.tcp_keepalive_probes = 10
+
+# SOCKS / WARP Local Loopback Optimization
+net.ipv4.tcp_window_scaling = 1
+net.ipv4.tcp_mtu_probing = 1
+
+# Connection Tracking Limits (Prevents silent drops)
+net.netfilter.nf_conntrack_max = 2097152
+net.netfilter.nf_conntrack_tcp_timeout_established = 1200
+net.netfilter.nf_conntrack_udp_timeout = 60
+
+# Native BBR
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+SYSCTL
+sysctl --system >/dev/null 2>&1 || true
+
+mkdir -p /etc/security/limits.d
+cat <<'LIMITS' > /etc/security/limits.d/99-freenet.conf
+* soft nofile 1048576
+* hard nofile 1048576
+root soft nofile 1048576
+root hard nofile 1048576
+LIMITS
+
 # 1. Install & Configure Cloudflare WARP
 echo "Installing Cloudflare WARP..."
 curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
@@ -42,6 +93,7 @@ echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] ht
 apt-get update -y && apt-get install -y cloudflare-warp
 
 echo "Registering WARP and setting to proxy mode..."
+warp-cli --accept-tos registration delete 2>/dev/null || true
 warp-cli --accept-tos registration new
 warp-cli --accept-tos mode proxy
 warp-cli --accept-tos connect
@@ -51,8 +103,7 @@ echo "Installing Sing-box..."
 bash <(curl -fsSL https://sing-box.app/deb-install.sh)
 systemctl disable sing-box 2>/dev/null || true
 
-# 3. Setup Hysteria Directory and Certificates
-mkdir -p /etc/hysteria
+# 3. Setup Certificates
 touch /etc/hysteria/users.txt
 
 echo "Generating Certificates..."
@@ -278,8 +329,7 @@ echo "Installing Custom Menu (vc)..."
 cat << 'EOF_MENU' > /usr/local/bin/vc
 #!/bin/bash
 
-# --- System Variables (Set during install) ---
-MY_DOMAIN="DOMAIN_PLACEHOLDER"
+# --- System Variables ---
 MY_OBFS="OBFS_PLACEHOLDER"
 MY_PORT="PORT_PLACEHOLDER"
 
@@ -296,6 +346,9 @@ BOLD='\033[1m'
 CONFIG="/etc/hysteria/config.json"
 USER_DB="/etc/hysteria/users.txt"
 touch "$USER_DB"
+
+# Dynamically fetch domain
+MY_DOMAIN=$(cat /etc/hysteria/domain.txt 2>/dev/null || curl -4 -s --max-time 2 ipv4.icanhazip.com)
 
 # --- Header Functions ---
 get_ip() { curl -4 -s --max-time 2 ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}'; }
@@ -466,6 +519,24 @@ edit_speed() {
     pause_return
 }
 
+change_domain() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}CHANGE SERVER DOMAIN${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    current_dom=$(cat /etc/hysteria/domain.txt 2>/dev/null || echo "Not Set")
+    echo -e " Current Domain/IP: ${YELLOW}$current_dom${NC}\n"
+    read -rp " Enter New Domain or IP: " new_dom
+    if [ -n "$new_dom" ]; then
+        echo "$new_dom" > /etc/hysteria/domain.txt
+        MY_DOMAIN="$new_dom"
+        echo -e "\n${GREEN}✔ Domain successfully updated to: $new_dom${NC}"
+    else
+        echo -e "\n${RED}Action cancelled.${NC}"
+    fi
+    pause_return
+}
+
 uninstall_hysteria() {
     clear
     echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
@@ -516,8 +587,9 @@ while true; do
     echo -e "  [${YELLOW}4${NC}] List All Users"
     echo -e "  [${YELLOW}5${NC}] Edit Up/Down Speeds"
     echo -e "  [${YELLOW}6${NC}] Restart Hysteria Service"
-    echo -e "  [${RED}7${NC}] Uninstall Hysteria"
-    echo -e "  [${RED}8${NC}] Reboot Server"
+    echo -e "  [${YELLOW}7${NC}] Change Server Domain/IP"
+    echo -e "  [${RED}8${NC}] Uninstall Hysteria & WARP"
+    echo -e "  [${RED}9${NC}] Reboot Server"
     echo -e "  [${YELLOW}0${NC}] Exit\n"
     read -rp "  ► Select an option: " opt
 
@@ -528,8 +600,9 @@ while true; do
         4) list_users ;;
         5) edit_speed ;;
         6) systemctl restart hysteria-server; echo -e "${GREEN}✔ Service Restarted!${NC}"; sleep 1 ;;
-        7) uninstall_hysteria ;;
-        8) read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
+        7) change_domain ;;
+        8) uninstall_hysteria ;;
+        9) read -rp "Reboot server now? [y/N]: " ans; [[ "$ans" =~ ^[Yy]$ ]] && reboot ;;
         0) clear; exit 0 ;;
         *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
     esac
@@ -537,13 +610,12 @@ done
 EOF_MENU
 
 # Inject Variables into Menu
-sed -i "s|DOMAIN_PLACEHOLDER|$DOMAIN|g" /usr/local/bin/vc
 sed -i "s|OBFS_PLACEHOLDER|$OBFS|g" /usr/local/bin/vc
 sed -i "s|PORT_PLACEHOLDER|$HYST_PORT|g" /usr/local/bin/vc
 
 chmod +x /usr/local/bin/vc
 
-# 8. Automated Expiry Tracking
+# 8. Automated Expiry & Maintenance Tracking
 echo "Setting up Automated Expiry tracking..."
 cat << 'EOF_EXP' > /usr/local/bin/hysteria-exp
 #!/bin/bash
@@ -566,6 +638,7 @@ EOF_EXP
 
 chmod +x /usr/local/bin/hysteria-exp
 echo "0 0 * * * root /usr/local/bin/hysteria-exp >/dev/null 2>&1" > /etc/cron.d/hysteria-expiry
+echo "0 3 * * * root sync; echo 3 > /proc/sys/vm/drop_caches" > /etc/cron.d/drop-cache
 
 # Enable and Start Services
 echo "Starting Services..."
