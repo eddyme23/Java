@@ -567,13 +567,20 @@ uninstall_hysteria() {
 
 draw_header() {
     local ip=$(get_ip)
+    local os=$(get_os)
+    local arch=$(get_arch)
+    local cores=$(get_cores)
+    local time=$(get_time)
+    local ram=$(get_ram)
+    local buf=$(get_buffer)
+
     echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}        >>>>>  🐉  ${YELLOW}${BOLD}Guruz GH Hysteria Menu${NC}${BLUE}  🐉  <<<<<${NC}"
     echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "  ${WHITE}IP:${NC} ${YELLOW}${ip}${NC}              ${WHITE}Domain:${NC} ${YELLOW}${MY_DOMAIN}${NC}"
-    echo -e "  ${WHITE}OS:${NC} ${YELLOW}$(get_os)${NC}          ${WHITE}Arch:${NC} ${YELLOW}$(get_arch)${NC}   ${WHITE}Cores:${NC} ${YELLOW}$(get_cores)${NC}"
-    echo -e "  ${WHITE}Time:${NC} ${YELLOW}$(get_time)${NC}      ${WHITE}Status:${NC} $(check_status)"
-    echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(get_ram)${NC}   ${WHITE}Buffer:${NC} ${YELLOW}$(get_buffer)${NC}"
+    printf "  ${WHITE}%-7s${NC} ${YELLOW}%-20s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "IP:" "$ip" "Domain:" "${MY_DOMAIN:-Not Set}"
+    printf "  ${WHITE}%-7s${NC} ${YELLOW}%-20s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "OS:" "$os" "Arch:" "$arch ($cores Cores)"
+    printf "  ${WHITE}%-7s${NC} ${YELLOW}%-20s${NC} ${WHITE}%-8s${NC} %s\n" "Time:" "$time" "Status:" "$(check_status)"
+    printf "  ${WHITE}%-7s${NC} ${YELLOW}%-20s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM:" "$ram" "Buffer:" "$buf"
     echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
 }
 
