@@ -340,7 +340,7 @@ MyStunnelC
 sed -i "s|Stunnel_Port|$Stunnel_Port|g" /etc/stunnel/stunnel.conf; sed -i "s|MainPort|$MainPort|g" /etc/stunnel/stunnel.conf
 systemctl restart "$STUNNEL_SERVICE"
 
-# Node.js Socks Proxy (Now Universal via SSLH)
+# Node.js Socks Proxy
 mkdir -p /etc/socksproxy; apt-get install -y nodejs
 cat <<EOF > /etc/socksproxy/proxy.js
 const net = require('net');
@@ -549,7 +549,6 @@ echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6
 echo "nameserver DNS1" > /etc/resolv.conf
 echo "nameserver DNS2" >> /etc/resolv.conf
 
-# For sslh
 mkdir -p /var/run/sslh
 touch /var/run/sslh/sslh.pid
 chmod 777 /var/run/sslh/sslh.pid
@@ -936,8 +935,15 @@ EOF
   echo -e "  ${BOLD}User${NC}        : ${YELLOW}$user${NC}"
   echo -e "  ${BOLD}Internal IP${NC} : ${YELLOW}$CLIENT_IP${NC}"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
+  
+  URL_SERVER_PUB=$(echo -n "$SERVER_PUB" | jq -sRr @uri)
+  WG_URI="wireguard://${CLIENT_PRIV}@$(server_ip):51820?publickey=${URL_SERVER_PUB}&ip=${CLIENT_IP}%2F24&mtu=1420#${user}-WG"
+  
+  echo -e "${BOLD}[ WIREGUARD LINK (Supported by v2rayNG & Xray) ]${NC}"
+  echo -e "${YELLOW}${WG_URI}${NC}\n"
+
   echo -e "${YELLOW}Download Config:${NC} http://$(server_ip):85/${user}-wg.conf"
-  echo -e "\n${CYAN}Scan this QR Code with your WireGuard app:${NC}\n"
+  echo -e "\n${CYAN}Scan this QR Code with the Official WireGuard app:${NC}\n"
   qrencode -t ansiutf8 < /home/vps/public_html/${user}-wg.conf
   pause_return
 }
