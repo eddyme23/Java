@@ -1890,22 +1890,33 @@ remove_script() {
 
 # --- Main Dashboard ---
 draw_header() {
-  IFS='|' read -r TOTAL FREE USED <<< "$(mem_stats)"
+  local os_name=$(. /etc/os-release 2>/dev/null; echo "${ID:-UNKNOWN}" | tr '[:lower:]' '[:upper:]')
+  local os_ver=$(. /etc/os-release 2>/dev/null; echo "${VERSION_ID:-}")
+  local os="${os_name} ${os_ver}"
+  local arch=$(uname -m)
+  local cores=$(cpu_count)
+  local ip=$(server_ip)
+  local time=$(date '+%H:%M %Z')
+  local status=$(server_status)
+  local ram=$(ram_percent)
+  local cpu=$(cpu_percent)
+  local buf=$(buffer_mem)
+
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
   echo -e "${BLUE}       >>>>>  🐉  ${YELLOW}${BOLD}Guruz GH${NC}${BLUE}  ✸  ${YELLOW}${BOLD}Plus${NC}${BLUE}  🐉  <<<<<${NC}"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
-  echo -e "  ${WHITE}OS:${NC} ${YELLOW}$(. /etc/os-release 2>/dev/null; echo "${ID:-UNKNOWN}" | tr '[:lower:]' '[:upper:]')${NC}   ${WHITE}Arch:${NC} ${YELLOW}$(uname -m)${NC}   ${WHITE}Cores:${NC} ${YELLOW}$(cpu_count)${NC}"
-  echo -e "  ${WHITE}IP:${NC} ${YELLOW}$(server_ip)${NC}   ${WHITE}Time:${NC} ${YELLOW}$(date '+%H:%M %Z')${NC}   ${WHITE}Status:${NC} $(server_status)"
+  printf "  ${WHITE}%-5s${NC} ${YELLOW}%-17s${NC} ${WHITE}%-6s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-7s${NC} ${YELLOW}%s${NC}\n" "OS:" "$os" "Arch:" "$arch" "Cores:" "$cores"
+  printf "  ${WHITE}%-5s${NC} ${YELLOW}%-17s${NC} ${WHITE}%-6s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-7s${NC} %s\n" "IP:" "$ip" "Time:" "$time" "Status:" "$status"
   echo -e "${CYAN}------------------------ ${BOLD}PROTOCOL PORTS${NC} ${CYAN}------------------------${NC}"
-  echo -e "  ${WHITE}• SSH:${NC} ${GREEN}22${NC}                        ${WHITE}• System-DNS:${NC} ${GREEN}53${NC}"
-  echo -e "  ${WHITE}• Dropbear:${NC} ${GREEN}80${NC}                   ${WHITE}• WEB-Nginx:${NC} ${GREEN}85${NC}"
-  echo -e "  ${WHITE}• SSL:${NC} ${GREEN}443${NC}                       ${WHITE}• SSL/PYTHON:${NC} ${GREEN}443${NC}"
-  echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}80, 8080, 8880${NC}      ${WHITE}• Squid:${NC} ${GREEN}8000${NC}"
-  echo -e "  ${WHITE}• WS/PYTHON:${NC} ${GREEN}2082, 2086, 25${NC}      ${WHITE}• BadVPN:${NC} ${GREEN}7300${NC}"
-  echo -e "  ${WHITE}• XRAY TLS:${NC} ${GREEN}443${NC}                  ${WHITE}• XRAY NTLS:${NC} ${GREEN}80, 8080, 8880${NC}"
-  echo -e "  ${WHITE}• SlowDNS:${NC} ${GREEN}53${NC}                    ${WHITE}• HysteriaUDP:${NC} ${GREEN}20000-50000${NC}"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SSH:" "22, 299" "System-DNS:" "53"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "Dropbear:" "790, 550" "WEB-Nginx:" "85"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SSL:" "443" "SSL/PYTHON:" "443"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "80, 8080, 8880" "Squid:" "3128, 8000"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086, 25" "BadVPN:" "7300"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
-  echo -e "  ${WHITE}RAM Used:${NC} ${YELLOW}$(ram_percent)${NC}   ${WHITE}CPU Used:${NC} ${YELLOW}$(cpu_percent)${NC}   ${WHITE}Buffer:${NC} ${YELLOW}$(buffer_mem)${NC}"
+  printf "  ${WHITE}%-10s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-10s${NC} ${YELLOW}%-10s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM Used:" "$ram" "CPU Used:" "$cpu" "Buffer:" "$buf"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
 }
 
