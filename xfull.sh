@@ -1107,8 +1107,15 @@ online_users() {
   mapfile -t USERS < <(list_real_users)
   
   for user in "${USERS[@]}"; do
-      count=$(ps -u "$user" -o comm= 2>/dev/null | grep -iE '^(sshd|dropbear)$' | wc -l)
-      if [ "$count" -gt 0 ]; then active_ssh["$user"]=$count; fi
+      # Debian 12 process parsing (accounts for OpenSSH Privilege Separation)
+      ssh_pids=$(ps -ef | grep -E "sshd: ${user}\b" | grep -v grep | wc -l)
+      ssh_count=$((ssh_pids / 2))
+      [ "$ssh_count" -eq 0 ] && [ "$ssh_pids" -gt 0 ] && ssh_count=1
+      
+      drop_count=$(ps -ef | grep -i "dropbear" | grep -w "${user}" | grep -v grep | wc -l)
+      
+      total=$((ssh_count + drop_count))
+      if [ "$total" -gt 0 ]; then active_ssh["$user"]=$total; fi
   done
 
   if [ "${#active_ssh[@]}" -eq 0 ]; then 
