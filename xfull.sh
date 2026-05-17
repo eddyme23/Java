@@ -30,7 +30,9 @@ Squid_Port1='3128'; Squid_Port2='8000'
 WsPorts=('10080' '25' '2082' '2086'); WsPort='10080'  
 MainPort='666' 
 OVPN_Port='1194'
+OVPN_UDP_Port='2200'
 SS_Port='8388'
+WG_Port='51820'
 
 read -p "Enter SlowDNS Nameserver (or press enter for default): " -e -i "ns-dl.guruzgh.ovh" Nameserver
 Serverkey='819d82813183e4be3ca1ad74387e47c0c993b81c601b2d1473a3f47731c404ae'
@@ -67,16 +69,17 @@ systemctl stop systemd-resolved 2>/dev/null; systemctl disable systemd-resolved 
 
 SSH_SERVICE="ssh"; DROPBEAR_SERVICE="dropbear"; STUNNEL_SERVICE="stunnel4"; SQUID_SERVICE="squid"; SSLH_SERVICE="sslh"; NGINX_SERVICE="nginx"; SFTP_SUBSYSTEM="internal-sftp"
 
-mkdir -p /etc/dropbear /etc/stunnel /etc/nginx/conf.d /etc/deekayvpn /var/run/sslh /etc/xray /etc/openvpn/server
+mkdir -p /etc/dropbear /etc/stunnel /etc/nginx/conf.d /etc/deekayvpn /var/run/sslh /etc/xray /etc/openvpn/server /etc/wireguard
 echo "$DOMAIN" > /etc/deekayvpn/domain.txt
 ssh-keygen -A >/dev/null 2>&1 || true
 
 PACKAGE_LIST=(
-  neofetch sslh dnsutils stunnel4 squid dropbear nano sudo wget unzip tar gzip
+  neofetch sslh dnsutils stunnel4 squid dropbear nano sudo wget unzip tar zip gzip
   iptables iptables-persistent netfilter-persistent bc cron dos2unix whois screen ruby
   apt-transport-https software-properties-common gnupg2 ca-certificates curl net-tools 
   nginx certbot jq figlet git gcc make build-essential perl expect libdbi-perl vnstat socat
   libnet-ssleay-perl libauthen-pam-perl libio-pty-perl apt-show-versions openssh-server rsyslog lsof procps openvpn easy-rsa
+  wireguard wireguard-tools qrencode
 )
 apt-get install -y "${PACKAGE_LIST[@]}"
 
@@ -103,7 +106,7 @@ gem install lolcat
 apt -y --purge remove apache2 ufw firewalld
 systemctl stop nginx
 
-# === OPENVPN (TCP 1194 with PAM Auth) ===
+# === OPENVPN (TCP 1194 & UDP 2200 with PAM Auth) ===
 echo "Configuring OpenVPN..."
 make-cadir /etc/openvpn/easy-rsa
 cd /etc/openvpn/easy-rsa
@@ -116,7 +119,9 @@ cp pki/ca.crt pki/issued/server.crt pki/private/server.key dh.pem ta.key /etc/op
 cd ~
 
 PAM_PLUGIN=$(find /usr/lib -type f -name "openvpn-plugin-auth-pam.so" | head -n 1)
-cat <<EOF > /etc/openvpn/server/server.conf
+
+# TCP Server Config (1194)
+cat <<EOF > /etc/openvpn/server/server-tcp.conf
 port $OVPN_Port
 proto tcp
 dev tun
@@ -138,7 +143,34 @@ user nobody
 group nogroup
 persist-key
 persist-tun
-status openvpn-status.log
+status openvpn-status-tcp.log
+verb 3
+EOF
+
+# UDP Server Config (2200)
+cat <<EOF > /etc/openvpn/server/server-udp.conf
+port $OVPN_UDP_Port
+proto udp
+dev tun
+ca ca.crt
+cert server.crt
+key server.key
+dh dh.pem
+tls-auth ta.key 0
+plugin $PAM_PLUGIN login
+verify-client-cert none
+username-as-common-name
+server 10.9.0.0 255.255.255.0
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS $Dns_1"
+push "dhcp-option DNS $Dns_2"
+keepalive 10 120
+cipher AES-256-GCM
+user nobody
+group nogroup
+persist-key
+persist-tun
+status openvpn-status-udp.log
 verb 3
 EOF
 
@@ -146,8 +178,30 @@ echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
 sysctl -p
 IFACE="$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)"
 iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o $IFACE -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $IFACE -j MASQUERADE
-systemctl enable openvpn-server@server
-systemctl restart openvpn-server@server
+iptables -t nat -C POSTROUTING -s 10.9.0.0/24 -o $IFACE -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.9.0.0/24 -o $IFACE -j MASQUERADE
+systemctl enable openvpn-server@server-tcp
+systemctl enable openvpn-server@server-udp
+systemctl restart openvpn-server@server-tcp
+systemctl restart openvpn-server@server-udp
+
+# === WIREGUARD (UDP 51820) ===
+echo "Configuring WireGuard..."
+cd /etc/wireguard
+wg genkey | tee server_private.key | wg pubkey > server_public.key
+SERVER_PRIV=$(cat server_private.key)
+cat <<EOF > wg0.conf
+[Interface]
+Address = 10.66.66.1/24
+ListenPort = $WG_Port
+PrivateKey = $SERVER_PRIV
+SaveConfig = false
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE
+EOF
+chmod 600 wg0.conf server_private.key
+systemctl enable wg-quick@wg0
+systemctl restart wg-quick@wg0
+cd ~
 
 # === HARDCODED CERTIFICATE ===
 cat <<'EOF_KEY' > /etc/xray/xray.key
@@ -263,7 +317,7 @@ systemctl restart "$DROPBEAR_SERVICE"
 cat << sslh > /etc/default/sslh
 RUN=yes
 DAEMON=/usr/sbin/sslh
-DAEMON_OPTS="--user sslh --listen 127.0.0.1:$MainPort --ssh 127.0.0.1:$Dropbear_Port1 --http 127.0.0.1:$WsPort --pidfile /var/run/sslh/sslh.pid"
+DAEMON_OPTS="--user sslh --listen 127.0.0.1:$MainPort --ssh 127.0.0.1:$Dropbear_Port1 --openvpn 127.0.0.1:$OVPN_Port --http 127.0.0.1:$WsPort --pidfile /var/run/sslh/sslh.pid"
 sslh
 mkdir -p /var/run/sslh; touch /var/run/sslh/sslh.pid; chmod 777 /var/run/sslh/sslh.pid
 systemctl restart "$SSLH_SERVICE"
@@ -286,12 +340,12 @@ MyStunnelC
 sed -i "s|Stunnel_Port|$Stunnel_Port|g" /etc/stunnel/stunnel.conf; sed -i "s|MainPort|$MainPort|g" /etc/stunnel/stunnel.conf
 systemctl restart "$STUNNEL_SERVICE"
 
-# Node.js Socks Proxy
+# Node.js Socks Proxy (Now Universal via SSLH)
 mkdir -p /etc/socksproxy; apt-get install -y nodejs
 cat <<EOF > /etc/socksproxy/proxy.js
 const net = require('net');
 process.on('uncaughtException', (err) => { });
-const TARGET_HOST = '127.0.0.1'; const TARGET_PORT = $Dropbear_Port1; const LISTEN_PORT = parseInt(process.argv[2]);
+const TARGET_HOST = '127.0.0.1'; const TARGET_PORT = $MainPort; const LISTEN_PORT = parseInt(process.argv[2]);
 const handleConnection = (clientSocket) => {
     clientSocket.once('data', (data) => {
         const targetSocket = net.connect(TARGET_PORT, TARGET_HOST, () => {
@@ -381,7 +435,7 @@ systemctl restart "$NGINX_SERVICE"
 
 cat <<'mySquid' > /etc/squid/squid.conf
 acl server dst IP-ADDRESS/32 localhost
-acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 1194 8388
+acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 1194 8388 51820
 http_port Squid_Port1
 http_port Squid_Port2
 http_access allow server
@@ -449,7 +503,7 @@ cat << EOF > /etc/hysteria/config.json
     }
   ],
   "outbounds": [ { "type": "socks", "tag": "warp-proxy", "server": "127.0.0.1", "server_port": 40000 }, { "type": "direct", "tag": "direct" } ],
-  "route": { "rules": [ { "inbound": ["hy1-inbound", "hy2-inbound"], "domain_suffix": [ "doubleclick.net", "admob.com", "googlevideo.com", "youtube.com" ], "outbound": "warp-proxy" }, { "inbound": ["hy1-inbound", "hy2-inbound"], "outbound": "direct" } ] }
+  "route": { "rules": [ { "inbound": ["hy1-inbound", "hy2-inbound"], "domain_suffix": [ "doubleclick.net", "googlesyndication.com", "googleadservices.com", "admob.com", "google-analytics.com", "app-measurement.com", "adservice.google.com", "g.doubleclick.net", "google.com", "pagead2.googlesyndication.com", "tpc.googlesyndication.com", "googlevideo.com", "gvt1.com", "gvt2.com", "gvt3.com", "ytimg.com", "youtube.com", "gstatic.com", "googleusercontent.com", "ggpht.com", "play.google.com", "firebaseio.com", "firebase.googleapis.com", "crashlytics.com", "fundingchoicesmessages.google.com", "imasdk.googleapis.com", "googleanalytics.com", "analytics.google.com", "fcm.googleapis.com", "mtalk.google.com", "firebaseinstallations.googleapis.com", "firebaselogging.googleapis.com", "firebaselogging-pa.googleapis.com", "firebaseremoteconfig.googleapis.com", "googleadapis.com", "accounts.google.com", "play.googleapis.com", "android.apis.google.com", "adsense.com", "1e100.net" ], "outbound": "warp-proxy" }, { "inbound": ["hy1-inbound", "hy2-inbound"], "outbound": "direct" } ] }
 }
 EOF
 echo "$PASSWORD $(date -d "+365 days" +"%Y-%m-%d")" > /etc/hysteria/users.txt
@@ -465,9 +519,67 @@ WantedBy=multi-user.target
 EOF
 iptables -I INPUT -p udp --dport ${UDP_PORT##*:} -j ACCEPT
 iptables -I INPUT -p udp --dport ${UDP_PORT2##*:} -j ACCEPT
-iptables -t nat -A PREROUTING -i $IFACE -p udp --dport 20000:40000 -j DNAT --to-destination ${UDP_PORT}
-iptables -t nat -A PREROUTING -i $IFACE -p udp --dport 50000:60000 -j DNAT --to-destination ${UDP_PORT2}
+iptables -t nat -A PREROUTING -i $IFACE -p udp --dport 20000:50000 -j DNAT --to-destination ${UDP_PORT}
+iptables -t nat -A PREROUTING -i $IFACE -p udp --dport 50001:60000 -j DNAT --to-destination ${UDP_PORT2}
 systemctl daemon-reload; systemctl enable --now hysteria-server
+
+cat > /etc/systemd/system/hysteria-nat.service <<EOF
+[Unit]
+Description=Restore Hysteria UDP NAT rule
+After=network-online.target
+Wants=network-online.target
+Before=hysteria-server.service
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT)'
+ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713)'
+ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport $HYST_PORT -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport $HYST_PORT -j ACCEPT'
+ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport 36713 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36713 -j ACCEPT'
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable hysteria-nat.service
+
+# Creating startup 1 script using cat eof tricks
+cat <<'deekayz' > /etc/deekaystartup
+#!/bin/sh
+export DEBIAN_FRONTEND=noninteractive
+echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6
+echo "nameserver DNS1" > /etc/resolv.conf
+echo "nameserver DNS2" >> /etc/resolv.conf
+
+# For sslh
+mkdir -p /var/run/sslh
+touch /var/run/sslh/sslh.pid
+chmod 777 /var/run/sslh/sslh.pid
+
+iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53 -j ACCEPT
+IFACE=$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)
+iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
+iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713
+deekayz
+
+sed -i "s|MyTimeZone|$MyVPS_Time|g" /etc/deekaystartup
+sed -i "s|DNS1|$Dns_1|g" /etc/deekaystartup
+sed -i "s|DNS2|$Dns_2|g" /etc/deekaystartup
+
+cat <<'deekayx' > /etc/systemd/system/deekaystartup.service
+[Unit]
+Description=Custom startup script
+ConditionPathExists=/etc/deekaystartup
+
+[Service]
+Type=oneshot
+ExecStart=/etc/deekaystartup
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+deekayx
+
+chmod +x /etc/deekaystartup
+systemctl enable deekaystartup
 
 # MENU CREATION
 mkdir -p /usr/local/bin
@@ -490,13 +602,21 @@ add_hysteria() {
     jq ".inbounds[0].users += [{\"auth_str\": \"$new_pass\"}] | .inbounds[1].users += [{\"password\": \"$new_pass\"}]" /etc/hysteria/config.json > /tmp/h.json && mv /tmp/h.json /etc/hysteria/config.json
     echo "$new_pass $exp_date" >> /etc/hysteria/users.txt; systemctl restart hysteria-server
     
-    echo -e "\n${GREEN}✔ User created for both Hysteria V1 & V2!${NC}"
-    echo -e " ${BOLD}Domain:${NC}      ${YELLOW}${DOMAIN}${NC}"
-    echo -e " ${BOLD}V1 Ports:${NC}    ${YELLOW}20000-40000 (-> 36712)${NC}"
-    echo -e " ${BOLD}V2 Ports:${NC}    ${YELLOW}50000-60000 (-> 36713)${NC}"
-    echo -e " ${BOLD}Password:${NC}    ${YELLOW}${new_pass}${NC}"
-    echo -e " ${BOLD}Obfs (V1/V2):${NC} ${YELLOW}GuruzScript / salamander:GuruzScript${NC}"
+    OBFS_V1=$(jq -r '.inbounds[0].obfs' /etc/hysteria/config.json 2>/dev/null || echo "GuruzScript")
+    OBFS_V2=$(jq -r '.inbounds[1].obfs.password' /etc/hysteria/config.json 2>/dev/null || echo "GuruzScript")
+    
+    clear
+    echo -e "${GREEN}✔ User created for both Hysteria V1 & V2!${NC}"
+    echo -e " ${BOLD}User/Pass:${NC}   ${YELLOW}${new_pass}${NC}"
     echo -e " ${BOLD}Expiry:${NC}      ${YELLOW}${exp_date}${NC}"
+    echo -e "${CYAN}--------------------------------------------------------------${NC}"
+    
+    echo -e "${BOLD}[ HYSTERIA V2 (Supported by Xray & NekoBox) ]${NC}"
+    echo -e "${YELLOW}hy2://${new_pass}@${DOMAIN}:36713/?insecure=1&sni=${DOMAIN}&obfs=salamander&obfs-password=${OBFS_V2}#${new_pass}-HY2${NC}\n"
+
+    echo -e "${BOLD}[ HYSTERIA V1 (Legacy) ]${NC}"
+    echo -e "${YELLOW}hysteria://${DOMAIN}:36712/?insecure=1&peer=${DOMAIN}&auth=${new_pass}&obfsParam=${OBFS_V1}&upmbps=100&downmbps=100&alpn=h3#${new_pass}-HY1${NC}"
+    
     pause_return
 }
 
@@ -540,30 +660,85 @@ add_xray() {
   pause_return
 }
 
-generate_ovpn() {
-  cat <<EOF > /home/vps/public_html/client.ovpn
-client
-dev tun
-proto tcp
-remote $(server_ip) 1194
-resolv-retry infinite
-nobind
-persist-key
-persist-tun
-auth-user-pass
-cipher AES-256-GCM
-auth SHA256
-key-direction 1
-<ca>
-$(cat /etc/openvpn/server/ca.crt)
-</ca>
-<tls-auth>
-$(cat /etc/openvpn/server/ta.key)
-</tls-auth>
+add_wg() {
+  clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}CREATE WIREGUARD USER${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  read -rp " Username: " user
+  if grep -q "^# BEGIN_PEER $user$" /etc/wireguard/wg0.conf; then echo -e "${RED}User already exists!${NC}"; pause_return; return; fi
+  
+  LAST_IP=$(grep -oP 'AllowedIPs = 10\.66\.66\.\K[0-9]+' /etc/wireguard/wg0.conf | sort -n | tail -1)
+  if [ -z "$LAST_IP" ]; then LAST_IP=1; fi
+  NEXT_IP=$((LAST_IP + 1))
+  if [ "$NEXT_IP" -gt 254 ]; then echo "IP range full!"; pause_return; return; fi
+  CLIENT_IP="10.66.66.${NEXT_IP}"
+
+  CLIENT_PRIV=$(wg genkey); CLIENT_PUB=$(echo "$CLIENT_PRIV" | wg pubkey); PSK=$(wg genpsk); SERVER_PUB=$(cat /etc/wireguard/server_public.key)
+
+  cat <<EOF >> /etc/wireguard/wg0.conf
+# BEGIN_PEER $user
+[Peer]
+PublicKey = $CLIENT_PUB
+PresharedKey = $PSK
+AllowedIPs = ${CLIENT_IP}/32
+# END_PEER $user
 EOF
-  echo -e "\n${GREEN}✔ OVPN File Generated!${NC}"
-  echo -e "${YELLOW}Download link:${NC} http://$(server_ip):85/client.ovpn"
-  echo -e "Note: Users authenticate with their SSH Username & Password."
+  systemctl restart wg-quick@wg0
+
+  cat <<EOF > /home/vps/public_html/${user}-wg.conf
+[Interface]
+PrivateKey = $CLIENT_PRIV
+Address = ${CLIENT_IP}/24
+DNS = 1.1.1.1, 1.0.0.1
+
+[Peer]
+PublicKey = $SERVER_PUB
+PresharedKey = $PSK
+Endpoint = $(server_ip):51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+EOF
+  
+  clear; echo -e "${GREEN}✔ WIREGUARD ACCOUNT CREATED${NC}"
+  echo -e " User: $user | Internal IP: $CLIENT_IP"
+  echo -e "${YELLOW}Download Config:${NC} http://$(server_ip):85/${user}-wg.conf"
+  echo -e "\n${CYAN}Scan this QR Code with your WireGuard app:${NC}\n"
+  qrencode -t ansiutf8 < /home/vps/public_html/${user}-wg.conf
+  pause_return
+}
+
+wg_menu() {
+  while true; do
+    clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}WIREGUARD MANAGEMENT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  [${YELLOW}1${NC}] Add WG User\n  [${YELLOW}2${NC}] Delete WG User\n  [${YELLOW}0${NC}] Back\n"
+    read -rp "  ► Option: " sub
+    case "$sub" in 
+      1) add_wg ;; 
+      2) clear; read -rp " Username to delete: " user
+         if ! grep -q "^# BEGIN_PEER $user$" /etc/wireguard/wg0.conf; then echo "User not found!"; pause_return; continue; fi
+         sed -i "/^# BEGIN_PEER $user$/,/^# END_PEER $user$/d" /etc/wireguard/wg0.conf
+         rm -f /home/vps/public_html/${user}-wg.conf
+         systemctl restart wg-quick@wg0
+         echo -e "${GREEN}✔ User deleted!${NC}"; pause_return ;;
+      0) break ;; 
+    esac
+  done
+}
+
+generate_ovpn() {
+  clear; echo -e "${CYAN}Generating OpenVPN Profiles...${NC}"
+  BASE_CONF="client\ndev tun\nresolv-retry infinite\nnobind\npersist-key\npersist-tun\nauth-user-pass\ncipher AES-256-GCM\nauth SHA256\nkey-direction 1\n<ca>\n$(cat /etc/openvpn/server/ca.crt)\n</ca>\n<tls-auth>\n$(cat /etc/openvpn/server/ta.key)\n</tls-auth>"
+  
+  echo -e "$BASE_CONF\nproto udp\nremote $(server_ip) 2200" > /home/vps/public_html/udp-2200.ovpn
+  echo -e "$BASE_CONF\nproto tcp\nremote $(server_ip) 1194" > /home/vps/public_html/tcp-1194.ovpn
+  echo -e "$BASE_CONF\nproto tcp\nremote $(server_ip) 443" > /home/vps/public_html/tcp-443.ovpn
+  echo -e "$BASE_CONF\nproto tcp\nremote 127.0.0.1 1194\n# Note: Use this inside HTTP Custom/NetMod for SSL or WS Injection" > /home/vps/public_html/ssl-ws-payload.ovpn
+  
+  cd /home/vps/public_html && zip -q Guruz-OpenVPN.zip udp-2200.ovpn tcp-1194.ovpn tcp-443.ovpn ssl-ws-payload.ovpn
+  echo -e "\n${GREEN}✔ OVPN Files Generated!${NC}"
+  echo -e "${YELLOW}Download Complete ZIP:${NC} http://$(server_ip):85/Guruz-OpenVPN.zip\n"
+  echo -e "  [ UDP 2200 ] : http://$(server_ip):85/udp-2200.ovpn"
+  echo -e "  [ TCP 1194 ] : http://$(server_ip):85/tcp-1194.ovpn"
+  echo -e "  [ TCP 443  ] : http://$(server_ip):85/tcp-443.ovpn"
+  echo -e "  [ SSL / WS ] : http://$(server_ip):85/ssl-ws-payload.ovpn"
   pause_return
 }
 
@@ -581,23 +756,30 @@ draw_header() {
   printf "  ${WHITE}%-5s${NC} ${YELLOW}%-25s${NC} ${WHITE}%-5s${NC} ${YELLOW}%s${NC}\n" "IP:" "$ip" "Time:" "$time"
   printf "  ${WHITE}%-5s${NC} ${YELLOW}%-25s${NC} ${WHITE}%-5s${NC} ${YELLOW}%s${NC}\n" "OS:" "$os" "RAM:" "$ram"
   echo -e "${CYAN}------------------------ ${BOLD}SERVICES${NC} ${CYAN}------------------------${NC}"
-  echo -e "  ${WHITE}SSH/Dropbear:${NC} ${GREEN}22, 299, 790, 550${NC}   ${WHITE}OpenVPN:${NC} ${GREEN}1194${NC}"
-  echo -e "  ${WHITE}Xray TLS/NTLS:${NC} ${GREEN}443, 80${NC}          ${WHITE}Shadowsocks:${NC} ${GREEN}8388${NC}"
-  echo -e "  ${WHITE}Hysteria V1:${NC} ${GREEN}20000-40000${NC}        ${WHITE}Hysteria V2:${NC} ${GREEN}50000-60000${NC}"
-  echo -e "  ${WHITE}SlowDNS:${NC} ${GREEN}53 (Multiplexed)${NC}       ${WHITE}BadVPN:${NC} ${GREEN}7300${NC}"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SSH:" "22, 299" "System-DNS:" "53"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "Dropbear:" "790, 550" "WEB-Nginx:" "85"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SSL:" "443" "SSL/PYTHON:" "443"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "80, 8080, 8880" "Squid:" "3128, 8000"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086, 25" "BadVPN:" "7300"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "OpenVPN TCP:" "1194, 443" "OpenVPN UDP:" "2200"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "OpenVPN SSL:" "443, 80" "Shadowsocks:" "8388"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53 (Multiplexed)" "WireGuard:" "51820 (UDP)"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "Hysteria V1:" "20000-50000" "Hysteria V2:" "50001-60000"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
 }
 
 while true; do
   clear; draw_header; echo
-  echo -e "  [${YELLOW}01${NC}] SSH & OpenVPN Users\n  [${YELLOW}02${NC}] Generate .ovpn Client File\n  [${YELLOW}03${NC}] Xray & SS Users\n  [${YELLOW}04${NC}] Hysteria V1 & V2 Users\n  [${YELLOW}05${NC}] System Utilities (BBR/Netflix)\n  [${RED}00${NC}] Exit\n"
+  echo -e "  [${YELLOW}01${NC}] SSH & OpenVPN Users\n  [${YELLOW}02${NC}] Generate .ovpn Client Files\n  [${YELLOW}03${NC}] Xray & SS Users\n  [${YELLOW}04${NC}] Hysteria V1 & V2 Users\n  [${YELLOW}05${NC}] WireGuard Users\n  [${YELLOW}06${NC}] System Utilities (BBR/Netflix)\n  [${RED}00${NC}] Exit\n"
   read -rp "  ► Option: " opt
   case "$opt" in
     1|01) create_user ;;
     2|02) generate_ovpn ;;
     3|03) add_xray ;;
     4|04) add_hysteria ;;
-    5|05) bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -M 0 | sed -E -e 's/解锁/Unlocked/g' -e 's/未解锁/Blocked/g' -e 's/失败/Failed/g'; pause_return ;;
+    5|05) wg_menu ;;
+    6|06) bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -M 0 | sed -E -e 's/解锁/Unlocked/g' -e 's/未解锁/Blocked/g' -e 's/失败/Failed/g'; pause_return ;;
     0|00) clear; exit 0 ;;
   esac
 done
