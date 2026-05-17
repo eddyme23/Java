@@ -541,7 +541,7 @@ WantedBy=multi-user.target
 EOF
 systemctl enable hysteria-nat.service
 
-# Creating startup 1 script using cat eof tricks
+# Creating startup script
 cat <<'deekayz' > /etc/deekaystartup
 #!/bin/sh
 export DEBIAN_FRONTEND=noninteractive
@@ -586,14 +586,14 @@ mkdir -p /usr/local/bin
 cat > /usr/local/bin/menu <<'EOF_MENU'
 #!/bin/bash
 RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; BLUE='\033[1;34m'; CYAN='\033[1;36m'; WHITE='\033[1;37m'; NC='\033[0m'; BOLD='\033[1m'
-DOMAIN=$(cat /etc/deekayvpn/domain.txt 2>/dev/null || curl -4 -s ipv4.icanhazip.com)
+DOMAIN=$(cat /etc/deekayvpn/domain.txt 2>/dev/null || curl -4 -s --max-time 2 ipv4.icanhazip.com)
 
 HYST_CONFIG="/etc/hysteria/config.json"
 HYST_USER_DB="/etc/hysteria/users.txt"
 touch "$HYST_USER_DB" 2>/dev/null || true
 
 # Functions
-server_ip() { curl -4 -s ipv4.icanhazip.com || hostname -I | awk '{print $1}'; }
+server_ip() { curl -4 -s --max-time 2 ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}'; }
 cpu_count() { nproc 2>/dev/null || echo "1"; }
 mem_stats() { free -h 2>/dev/null | awk '/Mem:/ {print $2 "|" $7 "|" $3}'; }
 ram_percent() { free 2>/dev/null | awk '/Mem:/ { if ($2>0) printf "%.1f%%", ($3/$2)*100; else print "0.0%" }'; }
@@ -611,67 +611,109 @@ pause_return() { echo; read -rp "Press ENTER to return... " _; }
 
 # --- HYSTERIA FUNCTIONS ---
 add_hysteria() {
-    clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                 ${BOLD}CREATE HYSTERIA (V1 & V2) USER${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}CREATE HYSTERIA USER${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     read -rp " Enter Password: " new_pass
-    if grep -qw "^$new_pass" "/etc/hysteria/users.txt" 2>/dev/null; then echo -e "\n${RED}User exists!${NC}"; pause_return; return; fi
+    
+    if grep -qw "^$new_pass" "$HYST_USER_DB" 2>/dev/null; then
+        echo -e "\n${RED}Error: User/Password already exists!${NC}"
+        pause_return; return
+    fi
+
     read -rp " Validity (Days): " days
+    if ! [[ "$days" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid number.${NC}"; pause_return; return; fi
     exp_date=$(date -d "+${days} days" +"%Y-%m-%d")
     
-    jq ".inbounds[0].users += [{\"auth_str\": \"$new_pass\"}] | .inbounds[1].users += [{\"password\": \"$new_pass\"}]" /etc/hysteria/config.json > /tmp/h.json && mv /tmp/h.json /etc/hysteria/config.json
-    echo "$new_pass $exp_date" >> /etc/hysteria/users.txt; systemctl restart hysteria-server
+    jq ".inbounds[0].users += [{\"auth_str\": \"$new_pass\"}] | .inbounds[1].users += [{\"password\": \"$new_pass\"}]" "$HYST_CONFIG" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG"
+    echo "$new_pass $exp_date" >> "$HYST_USER_DB"
+    systemctl restart hysteria-server
     
-    OBFS_V1=$(jq -r '.inbounds[0].obfs' /etc/hysteria/config.json 2>/dev/null || echo "GuruzScript")
-    OBFS_V2=$(jq -r '.inbounds[1].obfs.password' /etc/hysteria/config.json 2>/dev/null || echo "GuruzScript")
+    OBFS_V1=$(jq -r '.inbounds[0].obfs' "$HYST_CONFIG" 2>/dev/null || echo "GuruzScript")
+    OBFS_V2=$(jq -r '.inbounds[1].obfs.password' "$HYST_CONFIG" 2>/dev/null || echo "GuruzScript")
     
     clear
-    echo -e "${GREEN}✔ User created for both Hysteria V1 & V2!${NC}"
-    echo -e " ${BOLD}User/Pass:${NC}   ${YELLOW}${new_pass}${NC}"
-    echo -e " ${BOLD}Expiry:${NC}      ${YELLOW}${exp_date}${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}HYSTERIA ACCOUNT CREATED${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${BOLD}Domain/Host${NC}: ${YELLOW}${DOMAIN}${NC}"
+    echo -e "  ${BOLD}V1 Ports${NC}   : ${YELLOW}20000-50000 (-> 36712)${NC}"
+    echo -e "  ${BOLD}V2 Ports${NC}   : ${YELLOW}50001-60000 (-> 36713)${NC}"
+    echo -e "  ${BOLD}Password${NC}   : ${YELLOW}${new_pass}${NC}"
+    echo -e "  ${BOLD}Obfs (V1)${NC}  : ${YELLOW}${OBFS_V1}${NC}"
+    echo -e "  ${BOLD}Obfs (V2)${NC}  : ${YELLOW}salamander / ${OBFS_V2}${NC}"
+    echo -e "  ${BOLD}Expiry Date${NC}: ${YELLOW}${exp_date}${NC}"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
+    
     echo -e "${BOLD}[ HYSTERIA V2 (Supported by Xray & NekoBox) ]${NC}"
     echo -e "${YELLOW}hy2://${new_pass}@${DOMAIN}:36713/?insecure=1&sni=${DOMAIN}&obfs=salamander&obfs-password=${OBFS_V2}#${new_pass}-HY2${NC}\n"
+
     echo -e "${BOLD}[ HYSTERIA V1 (Legacy) ]${NC}"
     echo -e "${YELLOW}hysteria://${DOMAIN}:36712/?insecure=1&peer=${DOMAIN}&auth=${new_pass}&obfsParam=${OBFS_V1}&upmbps=100&downmbps=100&alpn=h3#${new_pass}-HY1${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     pause_return
 }
 
 del_hysteria() {
-    clear; echo -e "${RED}══════════════════════════════════════════════════════════════${NC}\n                 ${BOLD}DELETE HYSTERIA USER${NC}\n${RED}══════════════════════════════════════════════════════════════${NC}"
+    clear
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}DELETE HYSTERIA USER${NC}"
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
     if [ ! -s "$HYST_USER_DB" ]; then echo -e "No users found."; pause_return; return; fi
     cat -n "$HYST_USER_DB" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
-    echo ""; read -rp " Enter ID number to delete: " del_id
+    echo ""
+    read -rp " Enter the ID number of the user to delete: " del_id
     if ! [[ "$del_id" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid ID.${NC}"; pause_return; return; fi
+
     del_pass=$(sed -n "${del_id}p" "$HYST_USER_DB" | awk '{print $1}')
     if [ -z "$del_pass" ]; then echo -e "${RED}ID not found.${NC}"; pause_return; return; fi
+
     jq ".inbounds[0].users |= map(select(.auth_str != \"$del_pass\")) | .inbounds[1].users |= map(select(.password != \"$del_pass\"))" "$HYST_CONFIG" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG"
     sed -i "${del_id}d" "$HYST_USER_DB"
     systemctl restart hysteria-server
-    echo -e "\n${GREEN}✔ User '$del_pass' deleted!${NC}"; pause_return
+    echo -e "\n${GREEN}✔ User '$del_pass' deleted successfully!${NC}"
+    pause_return
 }
 
 extend_hysteria() {
-    clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                 ${BOLD}EXTEND HYSTERIA USER${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}EXTEND HYSTERIA USER${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     if [ ! -s "$HYST_USER_DB" ]; then echo -e "No users found."; pause_return; return; fi
+
     cat -n "$HYST_USER_DB" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
-    echo ""; read -rp " Enter ID number to extend: " ext_id
+    echo ""
+    read -rp " Enter the ID number of the user to extend: " ext_id
     if ! [[ "$ext_id" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid ID.${NC}"; pause_return; return; fi
+    
     ext_pass=$(sed -n "${ext_id}p" "$HYST_USER_DB" | awk '{print $1}')
     current_exp=$(sed -n "${ext_id}p" "$HYST_USER_DB" | awk '{print $2}')
     if [ -z "$ext_pass" ]; then echo -e "${RED}ID not found.${NC}"; pause_return; return; fi
+    
     read -rp " Add Validity (Days): " days
     if ! [[ "$days" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid number.${NC}"; pause_return; return; fi
+    
     new_exp=$(date -d "$current_exp + $days days" +"%Y-%m-%d")
     sed -i "${ext_id}s/.*/$ext_pass $new_exp/" "$HYST_USER_DB"
-    echo -e "\n${GREEN}✔ User '$ext_pass' extended successfully!${NC}\n New Expiry: ${YELLOW}$new_exp${NC}"; pause_return
+    
+    echo -e "\n${GREEN}✔ User '$ext_pass' extended successfully!${NC}\n New Expiry: ${YELLOW}$new_exp${NC}"
+    pause_return
 }
 
 list_hysteria() {
-    clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}HYSTERIA USERS LIST${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}HYSTERIA USERS LIST${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     if [ ! -s "$HYST_USER_DB" ]; then echo -e "\n No active users found.\n"
     else
-        printf " %-5s | %-25s | %-15s\n" "ID" "PASSWORD" "EXPIRY DATE"
+        printf " %-5s | %-25s | %-15s\n" "ID" "PASSWORD (AUTH STRING)" "EXPIRY DATE"
         echo -e "${CYAN}--------------------------------------------------------------${NC}"
-        cat -n "$HYST_USER_DB" | while read -r num user exp; do printf " [%-3s] | %-25s | %-15s\n" "$num" "$user" "$exp"; done
+        cat -n "$HYST_USER_DB" | while read -r num user exp; do
+            printf " [%-3s] | %-25s | %-15s\n" "$num" "$user" "$exp"
+        done
         echo -e "${CYAN}--------------------------------------------------------------${NC}"
         echo -e " Total Active Users: ${YELLOW}$(wc -l < "$HYST_USER_DB")${NC}"
     fi
@@ -679,28 +721,50 @@ list_hysteria() {
 }
 
 speed_hysteria() {
-    clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                 ${BOLD}EDIT UP/DOWN SPEEDS${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}EDIT UP/DOWN SPEEDS${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     current_up=$(jq -r '.inbounds[0].up_mbps' "$HYST_CONFIG" 2>/dev/null || echo "100")
     current_down=$(jq -r '.inbounds[0].down_mbps' "$HYST_CONFIG" 2>/dev/null || echo "100")
-    echo -e " Current Upload:   ${YELLOW}${current_up} Mbps${NC}\n Current Download: ${YELLOW}${current_down} Mbps${NC}\n"
+    
+    echo -e " Current Upload:   ${YELLOW}${current_up} Mbps${NC}"
+    echo -e " Current Download: ${YELLOW}${current_down} Mbps${NC}\n"
+    
     read -rp " Enter New Upload Speed (Mbps): " new_up
     read -rp " Enter New Download Speed (Mbps): " new_down
+    
     if [[ "$new_up" =~ ^[0-9]+$ ]] && [[ "$new_down" =~ ^[0-9]+$ ]]; then
         jq ".inbounds[0].up_mbps = $new_up | .inbounds[0].down_mbps = $new_down | .inbounds[1].up_mbps = $new_up | .inbounds[1].down_mbps = $new_down" "$HYST_CONFIG" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG"
         systemctl restart hysteria-server
         echo -e "\n${GREEN}✔ Speeds updated successfully!${NC}"
-    else echo -e "\n${RED}Invalid input.${NC}"; fi
+    else echo -e "\n${RED}Invalid input. Numbers only.${NC}"; fi
     pause_return
 }
 
 # --- XRAY FUNCTIONS ---
 add_xray() {
-  clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}CREATE XRAY ACCOUNT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e " [1] VLESS (TLS & NTLS)\n [2] VMESS (TLS & NTLS)\n [3] TROJAN (TLS)\n [4] SHADOWSOCKS (AEAD)\n [5] ALL-IN-ONE"
-  read -rp " Select: " prot; read -rp " Username: " user
-  if grep -qw "^$user" /etc/xray/*.txt 2>/dev/null; then echo -e "${RED}Exists!${NC}"; pause_return; return; fi
-  read -rp " Validity (Days): " masa; exp=$(date -d "+${masa} days" +"%Y-%m-%d")
-  uuid=$(cat /proc/sys/kernel/random/uuid); pass="Guruz${uuid:0:6}"; CURRENT_NS=$(grep 'ExecStart=' /etc/systemd/system/server-sldns.service 2>/dev/null | sed 's/.*server\.key \([^ ]*\) .*/\1/')
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}CREATE XRAY ACCOUNT${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e " [1] VLESS (TLS & NTLS)"
+  echo -e " [2] VMESS (TLS & NTLS)"
+  echo -e " [3] TROJAN (TLS)"
+  echo -e " [4] SHADOWSOCKS (AEAD)"
+  echo -e " [5] ALL-IN-ONE (All Protocols)"
+  read -rp " Select Protocol: " prot
+  read -rp " Username: " user
+  
+  if grep -qw "^$user" /etc/xray/*.txt 2>/dev/null; then
+    echo -e "${RED}Username already exists!${NC}"; pause_return; return
+  fi
+
+  read -rp " Validity (Days): " masa
+  exp=$(date -d "+${masa} days" +"%Y-%m-%d")
+  uuid=$(cat /proc/sys/kernel/random/uuid)
+  pass="Guruz${uuid:0:6}"
+  CURRENT_NS=$(grep 'ExecStart=' /etc/systemd/system/server-sldns.service 2>/dev/null | sed 's/.*server\.key \([^ ]*\) .*/\1/')
 
   if [ "$prot" == "4" ] || [ "$prot" == "5" ]; then
     ss_pass=$(cat /proc/sys/kernel/random/uuid | sed 's/-//g' | head -c 16)
@@ -721,28 +785,58 @@ add_xray() {
   fi
   systemctl restart xray
   
-  clear; echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}ACCOUNT CREATED${NC}\n${GREEN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e "User: $user | Exp: $exp | Domain: $DOMAIN\n"
-  [ "$prot" == "1" ] || [ "$prot" == "5" ] && echo -e "${YELLOW}VLESS TLS:${NC} vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&path=%2Fvless\n${YELLOW}VLESS NTLS/DNS:${NC} vless://${uuid}@${DOMAIN}:80?type=ws&security=none&path=%2Fvless\n"
-  [ "$prot" == "2" ] || [ "$prot" == "5" ] && echo -e "${YELLOW}VMESS TLS/NTLS:${NC} (Generated internally via ID: ${uuid})\n"
-  [ "$prot" == "3" ] || [ "$prot" == "5" ] && echo -e "${YELLOW}TROJAN TLS:${NC} trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan\n"
-  [ "$prot" == "4" ] || [ "$prot" == "5" ] && echo -e "${YELLOW}SHADOWSOCKS:${NC} ss://$(echo -n "chacha20-ietf-poly1305:${ss_pass}" | base64 -w 0)@${DOMAIN}:8388#${user}\n"
-  echo -e "  ${BOLD}SlowDNS NS ${NC}: ${YELLOW}${CURRENT_NS:-Not Set}${NC}\n  ${BOLD}DNS PUB KEY${NC}: 7fbd1f8aa0abfe15a7903e837f78aba39cf61d36f183bd604daa2fe4ef3b7b59\n"
+  clear
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}ACCOUNT CREATED${NC}"
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "  ${BOLD}Domain${NC}   : ${YELLOW}$DOMAIN${NC}"
+  echo -e "  ${BOLD}Username${NC} : ${YELLOW}$user${NC}"
+  echo -e "  ${BOLD}Expiry${NC}   : ${YELLOW}$exp${NC}"
+  echo -e "${CYAN}--------------------------------------------------------------${NC}"
+  
+  if [ "$prot" == "1" ] || [ "$prot" == "5" ]; then
+    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "\n${YELLOW}[ VLESS NTLS / SlowDNS ]${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}"
+  fi
+  if [ "$prot" == "2" ] || [ "$prot" == "5" ]; then
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
+    echo -e "\n${YELLOW}[ VMESS TLS (443) ]${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
+    VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
+    echo -e "\n${YELLOW}[ VMESS NTLS / SlowDNS ]${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
+  fi
+  if [ "$prot" == "3" ] || [ "$prot" == "5" ]; then
+    echo -e "\n${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+  fi
+  if [ "$prot" == "4" ] || [ "$prot" == "5" ]; then
+    echo -e "\n${YELLOW}[ SHADOWSOCKS ]${NC}\nss://$(echo -n "chacha20-ietf-poly1305:${ss_pass}" | base64 -w 0)@${DOMAIN}:8388#${user}"
+  fi
+
+  echo -e "\n${CYAN}--------------------------------------------------------------${NC}"
+  echo -e "  ${BOLD}SlowDNS NS ${NC}: ${YELLOW}${CURRENT_NS:-Not Set}${NC}"
+  echo -e "  ${BOLD}DNS PUB KEY${NC}: 7fbd1f8aa0abfe15a7903e837f78aba39cf61d36f183bd604daa2fe4ef3b7b59"
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   pause_return
 }
 
 del_xray() {
-  clear; echo -e "${RED}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}DELETE XRAY ACCOUNT${NC}\n${RED}══════════════════════════════════════════════════════════════${NC}"
+  clear
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}DELETE XRAY ACCOUNT${NC}"
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to delete: " user
   if ! grep -qw "^$user" /etc/xray/*.txt 2>/dev/null; then echo -e "${YELLOW}User not found.${NC}"; pause_return; return; fi
   jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
   sed -i "/^$user /d" /etc/xray/vless.txt /etc/xray/vmess.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt 2>/dev/null
   systemctl restart xray
-  echo -e "\n${GREEN}✔ User $user deleted successfully.${NC}"; pause_return
+  echo -e "\n${GREEN}✔ User $user deleted successfully.${NC}"
+  pause_return
 }
 
 renew_xray() {
-  clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}RENEW XRAY ACCOUNT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}RENEW XRAY ACCOUNT${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to renew: " user
   if ! grep -qw "^$user" /etc/xray/*.txt 2>/dev/null; then echo -e "${RED}User not found.${NC}"; pause_return; return; fi
   read -rp " Add Validity (Days): " days
@@ -753,37 +847,53 @@ renew_xray() {
       sed -i "s/^$user .* $current_exp/$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $1 " " $2}') $new_exp/" "/etc/xray/${proto}.txt"
     fi
   done
-  echo -e "\n${GREEN}✔ User '$user' renewed successfully.${NC}\nNew Expiry: $new_exp"; pause_return
+  echo -e "\n${GREEN}✔ User '$user' renewed successfully.${NC}\nNew Expiry: $new_exp"
+  pause_return
 }
 
 show_xray() {
-  clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}SHOW XRAY CONFIG LINKS${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  read -rp " Username to view: " user; local found=0
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}SHOW XRAY CONFIG LINKS${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  read -rp " Username to view: " user
+  local found=0
+  
   if grep -qw "^$user" /etc/xray/vless.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
-    echo -e "${YELLOW}VLESS TLS:${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
-    echo -e "${YELLOW}VLESS NTLS:${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}\n"
+    echo -e "${YELLOW}[ VLESS TLS (443) ]${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
+    echo -e "${YELLOW}[ VLESS NTLS / SlowDNS ]${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}\n"
     found=1
   fi
   if grep -qw "^$user" /etc/xray/vmess.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vmess.txt | awk '{print $2}')
-    echo -e "${YELLOW}VMESS Config generated internally. ID: ${uuid}${NC}\n"; found=1
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
+    echo -e "${YELLOW}[ VMESS TLS (443) ]${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)\n"
+    VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
+    echo -e "${YELLOW}[ VMESS NTLS / SlowDNS ]${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)\n"
+    found=1
   fi
   if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
-    echo -e "${YELLOW}TROJAN TLS:${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"; found=1
+    echo -e "${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
+    found=1
   fi
   if grep -qw "^$user" /etc/xray/shadowsocks.txt; then
     ss_pass=$(grep -w "^$user" /etc/xray/shadowsocks.txt | awk '{print $2}')
-    echo -e "${YELLOW}SHADOWSOCKS:${NC}\nss://$(echo -n "chacha20-ietf-poly1305:${ss_pass}" | base64 -w 0)@${DOMAIN}:8388#${user}\n"; found=1
+    echo -e "${YELLOW}[ SHADOWSOCKS ]${NC}\nss://$(echo -n "chacha20-ietf-poly1305:${ss_pass}" | base64 -w 0)@${DOMAIN}:8388#${user}\n"
+    found=1
   fi
+  
   if [ "$found" -eq 0 ]; then echo -e "${RED}User not found in any protocol.${NC}"; fi
   pause_return
 }
 
 # --- WIREGUARD FUNCTIONS ---
 add_wg() {
-  clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}CREATE WIREGUARD USER${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}CREATE WIREGUARD USER${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username: " user
   if grep -q "^# BEGIN_PEER $user$" /etc/wireguard/wg0.conf; then echo -e "${RED}User already exists!${NC}"; pause_return; return; fi
   
@@ -818,12 +928,48 @@ Endpoint = $(server_ip):51820
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 EOF
-  clear; echo -e "${GREEN}✔ WIREGUARD ACCOUNT CREATED${NC}"
-  echo -e " User: $user | Internal IP: $CLIENT_IP"
+  
+  clear
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}WIREGUARD ACCOUNT CREATED${NC}"
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "  ${BOLD}User${NC}        : ${YELLOW}$user${NC}"
+  echo -e "  ${BOLD}Internal IP${NC} : ${YELLOW}$CLIENT_IP${NC}"
+  echo -e "${CYAN}--------------------------------------------------------------${NC}"
   echo -e "${YELLOW}Download Config:${NC} http://$(server_ip):85/${user}-wg.conf"
   echo -e "\n${CYAN}Scan this QR Code with your WireGuard app:${NC}\n"
   qrencode -t ansiutf8 < /home/vps/public_html/${user}-wg.conf
   pause_return
+}
+
+wg_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}WIREGUARD MANAGEMENT${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  [${YELLOW}1${NC}] Add WG User"
+    echo -e "  [${YELLOW}2${NC}] Delete WG User"
+    echo -e "  [${YELLOW}0${NC}] Back\n"
+    read -rp "  ► Option: " sub
+    case "$sub" in 
+      1) add_wg ;; 
+      2) 
+         clear
+         echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+         echo -e "                   ${BOLD}DELETE WIREGUARD USER${NC}"
+         echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+         read -rp " Username to delete: " user
+         if ! grep -q "^# BEGIN_PEER $user$" /etc/wireguard/wg0.conf; then echo "User not found!"; pause_return; continue; fi
+         sed -i "/^# BEGIN_PEER $user$/,/^# END_PEER $user$/d" /etc/wireguard/wg0.conf
+         rm -f /home/vps/public_html/${user}-wg.conf
+         systemctl restart wg-quick@wg0
+         echo -e "\n${GREEN}✔ User $user deleted successfully!${NC}"
+         pause_return 
+         ;;
+      0) break ;; 
+    esac
+  done
 }
 
 # --- SSH / OPENVPN FUNCTIONS ---
@@ -833,24 +979,67 @@ select_user() {
   local purpose="$1"
   mapfile -t USERS < <(list_real_users)
   if [ "${#USERS[@]}" -eq 0 ]; then echo -e "${RED}No active user accounts found.${NC}"; return 1; fi
-  clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n %-56s \n${CYAN}══════════════════════════════════════════════════════════════${NC}" "${BOLD}$purpose${NC}"
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  printf " %-56s \n" "${BOLD}$purpose${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   for i in "${!USERS[@]}"; do printf "  [${YELLOW}%02d${NC}] %s\n" $((i+1)) "${USERS[$i]}"; done
-  echo -e "\n  [${YELLOW}00${NC}] Back\n"; read -rp "  Select an account number: " idx
+  echo -e "\n  [${YELLOW}00${NC}] Back\n"
+  read -rp "  Select an account number: " idx
   [[ "$idx" == "00" || "$idx" == "0" ]] && return 1
   if ! [[ "$idx" =~ ^[0-9]+$ ]] || [ "$idx" -lt 1 ] || [ "$idx" -gt "${#USERS[@]}" ]; then echo -e "${RED}  Invalid selection.${NC}"; return 1; fi
-  SELECTED_USER="${USERS[$((idx-1))]}"; return 0
+  SELECTED_USER="${USERS[$((idx-1))]}"
+  return 0
 }
 
 create_user() {
-  clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}CREATE NEW SSH & OVPN USER${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  read -rp "  Username: " user; read -rp "  Password: " pass; read -rp "  Valid for (days): " days
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}CREATE NEW SSH & OPENVPN USER${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  read -rp "  Username: " user
+  read -rp "  Password: " pass
+  read -rp "  Valid for (days): " days
+
   if [ -z "$user" ] || [ -z "$pass" ] || [ -z "$days" ]; then echo -e "\n${RED}  Error: All fields are required.${NC}"; pause_return; return; fi
   if id "$user" >/dev/null 2>&1; then echo -e "\n${RED}  Error: User '$user' already exists.${NC}"; pause_return; return; fi
+
   useradd -e "$(date -d "+$days days" +%Y-%m-%d)" -s /bin/false -M "$user" && echo "$user:$pass" | chpasswd
+
+  IP=$(curl -s ipv4.icanhazip.com)
   CURRENT_NS=$(grep 'ExecStart=' /etc/systemd/system/server-sldns.service 2>/dev/null | sed 's/.*server\.key \([^ ]*\) .*/\1/')
-  clear; echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}ACCOUNT CREATED SUCCESSFULLY${NC}\n${GREEN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e "  User: ${YELLOW}$user${NC} | Pass: ${YELLOW}$pass${NC} | Exp: ${YELLOW}$(date -d "+$days days" +%Y-%m-%d)${NC}\n"
-  echo -e "  ${BOLD}SlowDNS NS ${NC}: ${YELLOW}${CURRENT_NS:-Not Set}${NC}\n  ${BOLD}DNS PUB KEY${NC}: 7fbd1f8aa0abfe15a7903e837f78aba39cf61d36f183bd604daa2fe4ef3b7b59\n${GREEN}══════════════════════════════════════════════════════════════${NC}"; pause_return
+
+  clear
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}ACCOUNT CREATED SUCCESSFULLY${NC}"
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "  ${BOLD}Domain/Host${NC}: ${YELLOW}$DOMAIN${NC}"
+  echo -e "  ${BOLD}IP Address${NC} : ${YELLOW}$IP${NC}"
+  echo -e "  ${BOLD}Username${NC}   : ${YELLOW}$user${NC}"
+  echo -e "  ${BOLD}Password${NC}   : ${YELLOW}$pass${NC}"
+  echo -e "  ${BOLD}Expiry${NC}     : ${YELLOW}$(date -d "+$days days" +%Y-%m-%d)${NC}"
+  echo -e "${CYAN}--------------------------------------------------------------${NC}"
+  echo -e "  SSH Port     : 22, 299"
+  echo -e "  Dropbear     : 790, 550"
+  echo -e "  SSL/TLS      : 443"
+  echo -e "  SSL/WS       : 443"
+  echo -e "  WebSocket    : 80, 8080, 8880, 2082, 2086, 25"
+  echo -e "  OpenVPN TCP  : 1194, 443"
+  echo -e "  OpenVPN UDP  : 2200"
+  echo -e "  OpenVPN WS   : 80, 443"
+  echo -e "  SlowDNS      : 53"
+  echo -e "  BadVPN       : 7300"
+  echo -e "${CYAN}--------------------------------------------------------------${NC}"
+  echo -e "  ${BOLD}Payload HTTP     :${NC}"
+  echo -e "  ${YELLOW}GET / HTTP/1.1[crlf]Host: ${DOMAIN}[crlf]Connection: upgrade[crlf]Upgrade: websocket[crlf][crlf]${NC}"
+  echo -e ""
+  echo -e "  ${BOLD}Payload Enhanced :${NC}"
+  echo -e "  ${YELLOW}GET / HTTP/1.1[crlf]Host: bug.com[crlf][crlf]PATCH / HTTP/1.1[crlf]Host: ${DOMAIN}[crlf]Connection: upgrade[crlf]Upgrade: websocket[crlf][crlf]${NC}"
+  echo -e "${CYAN}--------------------------------------------------------------${NC}"
+  echo -e "  ${BOLD}SlowDNS NS ${NC}: ${YELLOW}${CURRENT_NS:-Not Set}${NC}"
+  echo -e "  ${BOLD}DNS PUB KEY${NC}: 7fbd1f8aa0abfe15a7903e837f78aba39cf61d36f183bd604daa2fe4ef3b7b59"
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  pause_return
 }
 
 extend_user() {
@@ -862,69 +1051,112 @@ extend_user() {
   if [ "$current" = "never" ] || [ -z "$current" ]; then new_exp=$(date -d "+$days days" +%Y-%m-%d)
   else new_exp=$(date -d "$current +$days days" +%Y-%m-%d); fi
   chage -E "$new_exp" "$SELECTED_USER"
-  echo -e "${GREEN}Success!${NC} Account extended.\nNew Expiry Date: ${YELLOW}$new_exp${NC}"; pause_return
+  echo -e "${GREEN}Success!${NC} Account extended.\nNew Expiry Date: ${YELLOW}$new_exp${NC}"
+  pause_return
 }
 
 delete_user() {
   if ! select_user "DELETE SSH USER"; then pause_return; return; fi
-  clear; echo -e "${RED}Warning: You are about to delete user: ${YELLOW}$SELECTED_USER${NC}"; read -rp "Are you sure? [y/N]: " ans
-  if [[ "$ans" =~ ^[Yy]$ ]]; then userdel -r "$SELECTED_USER" 2>/dev/null || userdel "$SELECTED_USER" 2>/dev/null; echo -e "${GREEN}User $SELECTED_USER has been deleted.${NC}"; fi
+  clear; echo -e "${RED}Warning: You are about to delete user: ${YELLOW}$SELECTED_USER${NC}"
+  read -rp "Are you sure? [y/N]: " ans
+  if [[ "$ans" =~ ^[Yy]$ ]]; then
+    userdel -r "$SELECTED_USER" 2>/dev/null || userdel "$SELECTED_USER" 2>/dev/null
+    echo -e "${GREEN}User $SELECTED_USER has been deleted.${NC}"
+  fi
   pause_return
 }
 
 generate_ovpn() {
-  clear; echo -e "${CYAN}Generating OpenVPN Profiles...${NC}"
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}OPENVPN CONFIG GENERATOR${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "Generating OpenVPN Profiles..."
   BASE_CONF="client\ndev tun\nresolv-retry infinite\nnobind\npersist-key\npersist-tun\nauth-user-pass\ncipher AES-256-GCM\nauth SHA256\nkey-direction 1\n<ca>\n$(cat /etc/openvpn/server/ca.crt)\n</ca>\n<tls-auth>\n$(cat /etc/openvpn/server/ta.key)\n</tls-auth>"
+  
   echo -e "$BASE_CONF\nproto udp\nremote $(server_ip) 2200" > /home/vps/public_html/udp-2200.ovpn
   echo -e "$BASE_CONF\nproto tcp\nremote $(server_ip) 1194" > /home/vps/public_html/tcp-1194.ovpn
   echo -e "$BASE_CONF\nproto tcp\nremote $(server_ip) 443" > /home/vps/public_html/tcp-443.ovpn
   echo -e "$BASE_CONF\nproto tcp\nremote 127.0.0.1 1194\n# Note: Use this inside HTTP Custom/NetMod for SSL or WS Injection" > /home/vps/public_html/ssl-ws-payload.ovpn
+  
   cd /home/vps/public_html && zip -q Guruz-OpenVPN.zip udp-2200.ovpn tcp-1194.ovpn tcp-443.ovpn ssl-ws-payload.ovpn
-  echo -e "\n${GREEN}✔ OVPN Files Generated!${NC}\n${YELLOW}Download Complete ZIP:${NC} http://$(server_ip):85/Guruz-OpenVPN.zip\n"; pause_return
+  echo -e "\n${GREEN}✔ OVPN Files Generated!${NC}"
+  echo -e "${YELLOW}Download Complete ZIP:${NC} http://$(server_ip):85/Guruz-OpenVPN.zip\n"
+  echo -e "  [ UDP 2200 ] : http://$(server_ip):85/udp-2200.ovpn"
+  echo -e "  [ TCP 1194 ] : http://$(server_ip):85/tcp-1194.ovpn"
+  echo -e "  [ TCP 443  ] : http://$(server_ip):85/tcp-443.ovpn"
+  echo -e "  [ SSL / WS ] : http://$(server_ip):85/ssl-ws-payload.ovpn"
+  pause_return
 }
 
 # --- SYSTEM UTILITIES ---
 online_users() {
-  clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n               ${BOLD}ACTIVE USER SESSIONS (SSH & XRAY)${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "               ${BOLD}ACTIVE USER SESSIONS (SSH & XRAY)${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
-  declare -A active_ssh; mapfile -t USERS < <(list_real_users)
+  declare -A active_ssh
+  mapfile -t USERS < <(list_real_users)
+  
   for user in "${USERS[@]}"; do
       count=$(ps -u "$user" -o comm= 2>/dev/null | grep -iE '^(sshd|dropbear)$' | wc -l)
       if [ "$count" -gt 0 ]; then active_ssh["$user"]=$count; fi
   done
-  if [ "${#active_ssh[@]}" -eq 0 ]; then echo -e "  No authenticated legacy users are currently online.\n"
+
+  if [ "${#active_ssh[@]}" -eq 0 ]; then 
+      echo -e "  No authenticated legacy users are currently online.\n"
   else
-    printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"; echo -e "${CYAN}  ----------------------------------------------------------${NC}"
-    for user in "${!active_ssh[@]}"; do printf "  %-25s %-15s\n" "$user" "${active_ssh[$user]}"; done | sort; echo
+    printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
+    echo -e "${CYAN}  ----------------------------------------------------------${NC}"
+    for user in "${!active_ssh[@]}"; do printf "  %-25s %-15s\n" "$user" "${active_ssh[$user]}"; done | sort
+    echo
   fi
 
   echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent Unique IPs) ---${NC}"
   if grep -q '"loglevel": "warning"' /etc/xray/config.json 2>/dev/null; then
-      sed -i 's/"loglevel": "warning"/"loglevel": "info"/g' /etc/xray/config.json; systemctl restart xray 2>/dev/null
+      sed -i 's/"loglevel": "warning"/"loglevel": "info"/g' /etc/xray/config.json
+      systemctl restart xray 2>/dev/null
       echo -e "  [System Note] Xray logging enabled. Reconnect users to see logs.\n"
   elif [ -f /var/log/xray/access.log ]; then
     active_xray=$(tail -n 10000 /var/log/xray/access.log 2>/dev/null | grep "accepted" | awk '{ user=""; for(i=1;i<=NF;i++) if($i=="email:") user=$(i+1); if(user!="") { split($3, a, ":"); print user " " a[1] } }' | sort -u | awk '{print $1}' | uniq -c | sort -nr)
-    if [ -z "$active_xray" ]; then echo -e "  No active Xray users found in logs.\n"
+    if [ -z "$active_xray" ]; then 
+        echo -e "  No active Xray users found in recent logs.\n"
     else
-      printf "  %-15s %-25s\n" "UNIQUE IPs" "USERNAME"; echo -e "${CYAN}  ----------------------------------------------------------${NC}"
+      printf "  %-15s %-25s\n" "UNIQUE IPs" "USERNAME"
+      echo -e "${CYAN}  ----------------------------------------------------------${NC}"
       while read -r count username; do if [ -n "$username" ]; then printf "  %-15s %-25s\n" "$count" "$username"; fi; done <<< "$active_xray"
     fi
-  else echo -e "  Xray access log not found.\n"; fi
+  else 
+      echo -e "  Xray access log not found.\n"
+  fi
   pause_return
 }
 
 service_control_menu() {
   while true; do
-    clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}SERVICE CONTROLS${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "  [${YELLOW}01${NC}] Restart All Services\n  [${YELLOW}02${NC}] Restart SSH & Dropbear\n  [${YELLOW}03${NC}] Restart OpenVPN & WireGuard\n  [${YELLOW}04${NC}] Restart Stunnel & Xray Core\n  [${YELLOW}05${NC}] Restart Squid Proxy & Nginx\n  [${YELLOW}06${NC}] Restart UDP Core (SlowDNS / Hysteria / BadVPN)\n  [${YELLOW}00${NC}] Back\n"
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}SERVICE CONTROLS${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  [${YELLOW}01${NC}] Restart All Services"
+    echo -e "  [${YELLOW}02${NC}] Restart SSH & Dropbear"
+    echo -e "  [${YELLOW}03${NC}] Restart OpenVPN & WireGuard"
+    echo -e "  [${YELLOW}04${NC}] Restart Stunnel & Xray Core"
+    echo -e "  [${YELLOW}05${NC}] Restart Squid Proxy & Nginx"
+    echo -e "  [${YELLOW}06${NC}] Restart UDP Core (SlowDNS / Hysteria / BadVPN)"
+    echo -e "  [${YELLOW}00${NC}] Back\n"
     read -rp "  Select an option: " opt
     case "$opt" in
-      1|01) systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray openvpn-server@server-tcp openvpn-server@server-udp wg-quick@wg0 2>/dev/null; echo "All Services Restarted."; pause_return ;;
-      2|02) systemctl restart ssh dropbear; echo "SSH Restarted."; pause_return ;;
-      3|03) systemctl restart openvpn-server@server-tcp openvpn-server@server-udp wg-quick@wg0; echo "VPNs Restarted."; pause_return ;;
-      4|04) systemctl restart stunnel4 xray; echo "Xray Restarted."; pause_return ;;
-      5|05) systemctl restart squid nginx; echo "Squid/Nginx Restarted."; pause_return ;;
-      6|06) systemctl restart server-sldns hysteria-server badvpn; echo "UDP Cores Restarted."; pause_return ;;
+      1|01) 
+        systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray openvpn-server@server-tcp openvpn-server@server-udp wg-quick@wg0 2>/dev/null
+        echo -e "${GREEN}✔ All Services Restarted.${NC}"; pause_return ;;
+      2|02) systemctl restart ssh dropbear; echo -e "${GREEN}✔ SSH Restarted.${NC}"; pause_return ;;
+      3|03) systemctl restart openvpn-server@server-tcp openvpn-server@server-udp wg-quick@wg0; echo -e "${GREEN}✔ VPNs Restarted.${NC}"; pause_return ;;
+      4|04) systemctl restart stunnel4 xray; echo -e "${GREEN}✔ Xray Restarted.${NC}"; pause_return ;;
+      5|05) systemctl restart squid nginx; echo -e "${GREEN}✔ Squid/Nginx Restarted.${NC}"; pause_return ;;
+      6|06) systemctl restart server-sldns hysteria-server badvpn; echo -e "${GREEN}✔ UDP Cores Restarted.${NC}"; pause_return ;;
       0|00) break ;;
     esac
   done
@@ -934,63 +1166,128 @@ backup_snapshot() {
   clear; local out="/root/guruzgh_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
   echo -e "Packaging server configurations..."
   tar -czf "$out" /etc/ssh /etc/default/dropbear /etc/stunnel /etc/squid /etc/hysteria /etc/deekayvpn /etc/systemd/system/ws-proxy@.service /etc/xray /etc/openvpn /etc/wireguard 2>/dev/null
-  echo -e "\n${GREEN}✔ Backup successfully created!${NC}\nLocation: ${YELLOW}$out${NC}"; pause_return
+  echo -e "\n${GREEN}✔ Backup successfully created!${NC}\nLocation: ${YELLOW}$out${NC}"
+  pause_return
 }
 
 restore_snapshot() {
-  clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}RESTORE CONFIGURATION${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  shopt -s nullglob; backups=(/root/guruzgh_backup_*.tar.gz)
+  clear
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                   ${BOLD}RESTORE CONFIGURATION${NC}"
+  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+  shopt -s nullglob
+  backups=(/root/guruzgh_backup_*.tar.gz)
   if [ ${#backups[@]} -eq 0 ]; then echo -e "${RED}  No backup files found in /root/.${NC}"; pause_return; return; fi
-  echo -e "  Available Backups:\n"; for i in "${!backups[@]}"; do printf "  [${YELLOW}%02d${NC}] %s\n" $((i+1)) "$(basename "${backups[$i]}")"; done
-  echo -e "\n  [${YELLOW}00${NC}] Cancel\n"; read -rp "  Select backup: " sel
+  
+  echo -e "  Available Backups:\n"
+  for i in "${!backups[@]}"; do printf "  [${YELLOW}%02d${NC}] %s\n" $((i+1)) "$(basename "${backups[$i]}")"; done
+  echo -e "\n  [${YELLOW}00${NC}] Cancel\n"
+  
+  read -rp "  Select backup: " sel
   if [[ "$sel" == "00" || "$sel" == "0" ]]; then return; fi
   idx=$((sel-1))
+  
   if [ -n "${backups[$idx]}" ]; then
-    echo -e "\nRestoring ${YELLOW}$(basename "${backups[$idx]}")${NC}..."; tar -xzf "${backups[$idx]}" -C /
-    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray openvpn-server@server-tcp openvpn-server@server-udp wg-quick@wg0 2>/dev/null || true
+    echo -e "\nRestoring ${YELLOW}$(basename "${backups[$idx]}")${NC}..."
+    tar -xzf "${backups[$idx]}" -C /
+    systemctl daemon-reload
+    systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray openvpn-server@server-tcp openvpn-server@server-udp wg-quick@wg0 2>/dev/null || true
     echo -e "${GREEN}✔ Restore complete!${NC}"
-  else echo -e "${RED}Invalid selection.${NC}"; fi
+  else 
+    echo -e "${RED}Invalid selection.${NC}"
+  fi
   pause_return
 }
 
 change_domain() {
-    clear; current_dom=$(cat /etc/deekayvpn/domain.txt 2>/dev/null || echo "Not Set")
-    echo -e " Current Domain: ${YELLOW}$current_dom${NC}\n"; read -rp " Enter New Domain or IP: " new_dom
-    if [ -n "$new_dom" ]; then echo "$new_dom" > /etc/deekayvpn/domain.txt; DOMAIN="$new_dom"; echo -e "\n${GREEN}✔ Domain successfully updated.${NC}"; else echo -e "\n${RED}Action cancelled.${NC}"; fi
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                 ${BOLD}CHANGE SERVER DOMAIN${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    current_dom=$(cat /etc/deekayvpn/domain.txt 2>/dev/null || echo "Not Set")
+    echo -e " Current Domain: ${YELLOW}$current_dom${NC}\n"
+    read -rp " Enter New Domain or IP: " new_dom
+    if [ -n "$new_dom" ]; then 
+        echo "$new_dom" > /etc/deekayvpn/domain.txt
+        DOMAIN="$new_dom"
+        echo -e "\n${GREEN}✔ Domain successfully updated.${NC}"
+    else 
+        echo -e "\n${RED}Action cancelled.${NC}"
+    fi
     pause_return
 }
 
 change_slowdns() {
-    clear; svc_file="/etc/systemd/system/server-sldns.service"
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "               ${BOLD}CHANGE SLOWDNS NAMESERVER${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    svc_file="/etc/systemd/system/server-sldns.service"
     if [ ! -f "$svc_file" ]; then echo -e "${RED}SlowDNS service file not found.${NC}"; pause_return; return; fi
+    
     current_ns=$(grep 'ExecStart=' "$svc_file" | sed 's/.*server\.key \([^ ]*\) .*/\1/')
-    echo -e " Current Nameserver: ${YELLOW}$current_ns${NC}\n"; read -rp " Enter New Nameserver: " new_ns
+    echo -e " Current Nameserver: ${YELLOW}$current_ns${NC}\n"
+    read -rp " Enter New Nameserver: " new_ns
+    
     if [ -n "$new_ns" ] && [ "$new_ns" != "$current_ns" ]; then
-        sed -i "s/$current_ns/$new_ns/g" "$svc_file"; systemctl daemon-reload; systemctl restart server-sldns
+        sed -i "s/$current_ns/$new_ns/g" "$svc_file"
+        systemctl daemon-reload
+        systemctl restart server-sldns
         echo -e "\n${GREEN}✔ SlowDNS Nameserver updated to: $new_ns${NC}"
-    else echo -e "\n${RED}Action cancelled.${NC}"; fi; pause_return
+    else 
+        echo -e "\n${RED}Action cancelled.${NC}"
+    fi
+    pause_return
 }
 
 remove_script() {
-  clear; echo -e "${RED}══════════════════════════════════════════════════════════════${NC}\n                     ${BOLD}FULL UNINSTALL${NC}\n${RED}══════════════════════════════════════════════════════════════${NC}"
+  clear
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                     ${BOLD}FULL UNINSTALL${NC}"
+  echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
   read -rp "  Are you absolutely sure? [y/N]: " ans
   if [[ "$ans" =~ ^[Yy]$ ]]; then
-      echo -e "\nStopping services..."; systemctl stop ws-proxy@* server-sldns badvpn hysteria-server sslh stunnel4 squid dropbear nginx xray openvpn-server@server-tcp openvpn-server@server-udp wg-quick@wg0 2>/dev/null || true
+      echo -e "\nStopping services..."
+      systemctl stop ws-proxy@* server-sldns badvpn hysteria-server sslh stunnel4 squid dropbear nginx xray openvpn-server@server-tcp openvpn-server@server-udp wg-quick@wg0 2>/dev/null || true
       systemctl disable ws-proxy@* server-sldns badvpn hysteria-server xray openvpn-server@server-tcp openvpn-server@server-udp wg-quick@wg0 2>/dev/null || true
-      echo "Deleting files..."; rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /etc/hysteria /etc/wireguard /etc/openvpn/server /usr/local/bin/menu /usr/bin/menu
-      systemctl daemon-reload; echo -e "${GREEN}✔ Removal complete.${NC}"
-  else echo "Cancelled."; fi; pause_return
+      echo "Deleting files..."
+      rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /etc/hysteria /etc/wireguard /etc/openvpn/server /usr/local/bin/menu /usr/bin/menu
+      systemctl daemon-reload
+      echo -e "${GREEN}✔ Removal complete.${NC}"
+  else 
+      echo "Cancelled."
+  fi
+  pause_return
 }
 
 advanced_menu() {
   while true; do
-    clear; echo -e "${RED}══════════════════════════════════════════════════════════════${NC}\n                     ${BOLD}ADVANCED SETTINGS${NC}\n${RED}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "  [${YELLOW}01${NC}] View Raw Hysteria JSON\n  [${YELLOW}02${NC}] View Action Logs (Journalctl)\n  [${YELLOW}03${NC}] Change Server Domain/IP\n  [${YELLOW}04${NC}] Change SlowDNS Nameserver (NS)\n  [${RED}05${NC}] Full Script Uninstall (Danger)\n  [${YELLOW}00${NC}] Back\n"
+    clear
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                     ${BOLD}ADVANCED SETTINGS${NC}"
+    echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  [${YELLOW}01${NC}] View Raw Hysteria JSON"
+    echo -e "  [${YELLOW}02${NC}] View Action Logs (Journalctl)"
+    echo -e "  [${YELLOW}03${NC}] Change Server Domain/IP"
+    echo -e "  [${YELLOW}04${NC}] Change SlowDNS Nameserver (NS)"
+    echo -e "  [${RED}05${NC}] Full Script Uninstall (Danger)"
+    echo -e "  [${YELLOW}00${NC}] Back\n"
     read -rp "  Select an option: " opt
     case "$opt" in
       1|01) clear; cat /etc/hysteria/config.json 2>/dev/null || echo "Not found."; pause_return ;;
-      2|02) clear; echo -e "[1] SSH [2] Hysteria [3] Xray [4] OpenVPN [5] WireGuard\n"; read -rp "Select log: " lopt
-            case "$lopt" in 1) journalctl -u ssh -n 50 --no-pager ;; 2) journalctl -u hysteria-server -n 50 --no-pager ;; 3) journalctl -u xray -n 50 --no-pager ;; 4) journalctl -u openvpn-server@server-tcp -n 50 --no-pager ;; 5) journalctl -u wg-quick@wg0 -n 50 --no-pager ;; esac; pause_return ;;
+      2|02) 
+        clear
+        echo -e "[1] SSH [2] Hysteria [3] Xray [4] OpenVPN [5] WireGuard\n"
+        read -rp "Select log: " lopt
+        case "$lopt" in 
+            1) journalctl -u ssh -n 50 --no-pager ;; 
+            2) journalctl -u hysteria-server -n 50 --no-pager ;; 
+            3) journalctl -u xray -n 50 --no-pager ;; 
+            4) journalctl -u openvpn-server@server-tcp -n 50 --no-pager ;; 
+            5) journalctl -u wg-quick@wg0 -n 50 --no-pager ;; 
+        esac
+        pause_return 
+        ;;
       3|03) change_domain ;;
       4|04) change_slowdns ;;
       5|05) remove_script ;;
@@ -1001,12 +1298,29 @@ advanced_menu() {
 
 utilities_menu() {
   while true; do
-    clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}SYSTEM UTILITIES${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "  [${YELLOW}1${NC}] Enable Native Kernel BBR\n  [${YELLOW}2${NC}] Check Netflix & Streaming Unlocks\n  [${YELLOW}0${NC}] Back\n"
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "                   ${BOLD}SYSTEM UTILITIES${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  [${YELLOW}1${NC}] Enable Native Kernel BBR"
+    echo -e "  [${YELLOW}2${NC}] Check Netflix & Streaming Unlocks"
+    echo -e "  [${YELLOW}0${NC}] Back\n"
     read -rp "  Select an option: " subopt
     case "$subopt" in 
-      1) sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf; sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf; echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf; echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf; sysctl -p >/dev/null 2>&1; echo -e "${GREEN}✔ BBR Enabled!${NC}"; pause_return ;; 
-      2) clear; bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -M 0 | sed -E -e 's/解锁/Unlocked/g' -e 's/未解锁/Blocked/g' -e 's/失败/Failed/g'; pause_return ;; 
+      1) 
+        sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+        sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+        sysctl -p >/dev/null 2>&1
+        echo -e "${GREEN}✔ BBR Enabled!${NC}"
+        pause_return 
+        ;; 
+      2) 
+        clear
+        bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -M 0 | sed -E -e 's/解锁/Unlocked/g' -e 's/未解锁/Blocked/g' -e 's/失败/Failed/g'
+        pause_return 
+        ;; 
       0) break ;; 
     esac
   done
@@ -1014,10 +1328,23 @@ utilities_menu() {
 
 # --- Main Dashboard ---
 draw_header() {
-  local os="${ID^^} ${VERSION_ID}"; local ip=$(server_ip); local time=$(date '+%H:%M'); local ram=$(free | awk '/Mem:/ {printf "%.1f%%", ($3/$2)*100}')
+  local os_name=$(. /etc/os-release 2>/dev/null; echo "${ID:-UNKNOWN}" | tr '[:lower:]' '[:upper:]')
+  local os_ver=$(. /etc/os-release 2>/dev/null; echo "${VERSION_ID:-}")
+  local os="${os_name} ${os_ver}"
+  local arch=$(uname -m)
+  local cores=$(cpu_count)
+  local ip=$(server_ip)
+  local time=$(date '+%H:%M %Z')
+  local status=$(server_status)
+  local ram=$(ram_percent)
+  local cpu=$(cpu_percent)
+  local buf=$(buffer_mem)
+
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
-  printf "  ${WHITE}%-5s${NC} ${YELLOW}%-25s${NC} ${WHITE}%-5s${NC} ${YELLOW}%s${NC}\n" "IP:" "$ip" "Time:" "$time"
-  printf "  ${WHITE}%-5s${NC} ${YELLOW}%-25s${NC} ${WHITE}%-5s${NC} ${YELLOW}%s${NC}\n" "OS:" "$os" "RAM:" "$ram"
+  echo -e "${BLUE}       >>>>>  🐉  ${YELLOW}${BOLD}Guruz GH${NC}${BLUE}  ✸  ${YELLOW}${BOLD}Plus${NC}${BLUE}  🐉  <<<<<${NC}"
+  echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
+  printf "  ${WHITE}%-5s${NC} ${YELLOW}%-17s${NC} ${WHITE}%-6s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-7s${NC} ${YELLOW}%s${NC}\n" "OS:" "$os" "Arch:" "$arch" "Cores:" "$cores"
+  printf "  ${WHITE}%-5s${NC} ${YELLOW}%-17s${NC} ${WHITE}%-6s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-7s${NC} %s\n" "IP:" "$ip" "Time:" "$time" "Status:" "$status"
   echo -e "${CYAN}------------------------ ${BOLD}SERVICES${NC} ${CYAN}------------------------${NC}"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SSH:" "22, 299" "System-DNS:" "53"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "Dropbear:" "790, 550" "WEB-Nginx:" "85"
@@ -1029,6 +1356,8 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53 (Multiplexed)" "WireGuard:" "51820 (UDP)"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "Hysteria V1:" "20000-50000" "Hysteria V2:" "50001-60000"
+  echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
+  printf "  ${WHITE}%-10s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-10s${NC} ${YELLOW}%-10s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM Used:" "$ram" "CPU Used:" "$cpu" "Buffer:" "$buf"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
 }
 
