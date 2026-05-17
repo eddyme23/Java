@@ -6,3 +6,6 @@ bash <(curl -sL https://raw.githubusercontent.com/eddyme23/Java/master/vchysteri
 
 # Enter Menu (type)
 vc
+
+# Run these after the uninstallation of the script
+apt autoremove -y && apt autoclean -y
