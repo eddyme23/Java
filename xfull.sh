@@ -64,8 +64,12 @@ function ip_address(){
 } 
 IPADDR="$(ip_address)"
 
-apt-get update -y && apt-get upgrade -y --with-new-pkgs
+# FIX: Stop resolved and immediately force custom DNS before trying to install packages
 systemctl stop systemd-resolved 2>/dev/null; systemctl disable systemd-resolved 2>/dev/null
+rm -f /etc/resolv.conf
+printf 'nameserver %s\nnameserver %s\n' "$Dns_1" "$Dns_2" > /etc/resolv.conf
+
+apt-get update -y && apt-get upgrade -y --with-new-pkgs
 
 SSH_SERVICE="ssh"; DROPBEAR_SERVICE="dropbear"; STUNNEL_SERVICE="stunnel4"; SQUID_SERVICE="squid"; SSLH_SERVICE="sslh"; NGINX_SERVICE="nginx"; SFTP_SUBSYSTEM="internal-sftp"
 
@@ -85,7 +89,6 @@ apt-get install -y "${PACKAGE_LIST[@]}"
 
 echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6
 sysctl -w net.ipv6.conf.all.disable_ipv6=1 && sysctl -w net.ipv6.conf.default.disable_ipv6=1
-printf 'nameserver %s\nnameserver %s\n' "$Dns_1" "$Dns_2" > /etc/resolv.conf
 ln -fs /usr/share/zoneinfo/$MyVPS_Time /etc/localtime
 
 cat > /root/.profile <<'EOF_PROFILE'
