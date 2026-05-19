@@ -1012,7 +1012,7 @@ create_user() {
 
   useradd -e "$(date -d "+$days days" +%Y-%m-%d)" -s /bin/false -M "$user" && echo "$user:$pass" | chpasswd
 
-  IP=$(curl -s ipv4.icanhazip.com)
+  IP=$(server_ip)
   CURRENT_NS=$(grep 'ExecStart=' /etc/systemd/system/server-sldns.service 2>/dev/null | sed 's/.*server\.key \([^ ]*\) .*/\1/')
 
   clear
