@@ -106,21 +106,21 @@ gem install lolcat
 apt -y --purge remove apache2 ufw firewalld
 systemctl stop nginx
 
-# === OPENVPN (TCP 1194 & UDP 2200 with PAM Auth) ===
-echo "Configuring OpenVPN..."
+# === OPENVPN (TCP 1194 & UDP 2200 with PAM Auth & ECDSA + TLS-Crypt) ===
+echo "Configuring OpenVPN with ECDSA & TLS-Crypt..."
 make-cadir /etc/openvpn/easy-rsa
 cd /etc/openvpn/easy-rsa
+echo "set_var EASYRSA_ALGO ec" > vars
+echo "set_var EASYRSA_CURVE prime256v1" >> vars
 ./easyrsa init-pki
 ./easyrsa --batch build-ca nopass
 ./easyrsa --batch build-server-full server nopass
-./easyrsa gen-dh
-openvpn --genkey secret ta.key
-cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem ta.key /etc/openvpn/server/
+openvpn --genkey secret tc.key
+cp pki/ca.crt pki/issued/server.crt pki/private/server.key tc.key /etc/openvpn/server/
 cd ~
 
 PAM_PLUGIN=$(find /usr/lib -type f -name "openvpn-plugin-auth-pam.so" | head -n 1)
 
-# TCP Server Config (1194)
 cat <<EOF > /etc/openvpn/server/server-tcp.conf
 port $OVPN_Port
 proto tcp
@@ -128,8 +128,9 @@ dev tun
 ca ca.crt
 cert server.crt
 key server.key
-dh dh.pem
-tls-auth ta.key 0
+dh none
+tls-groups X25519:prime256v1:secp384r1:secp521r1
+tls-crypt tc.key
 plugin $PAM_PLUGIN login
 verify-client-cert none
 username-as-common-name
@@ -137,8 +138,10 @@ server 10.8.0.0 255.255.255.0
 push "redirect-gateway def1 bypass-dhcp"
 push "dhcp-option DNS $Dns_1"
 push "dhcp-option DNS $Dns_2"
+push "block-ipv6"
 keepalive 10 120
 cipher AES-256-GCM
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
 user nobody
 group nogroup
 persist-key
@@ -147,7 +150,6 @@ status openvpn-status-tcp.log
 verb 3
 EOF
 
-# UDP Server Config (2200)
 cat <<EOF > /etc/openvpn/server/server-udp.conf
 port $OVPN_UDP_Port
 proto udp
@@ -155,8 +157,9 @@ dev tun
 ca ca.crt
 cert server.crt
 key server.key
-dh dh.pem
-tls-auth ta.key 0
+dh none
+tls-groups X25519:prime256v1:secp384r1:secp521r1
+tls-crypt tc.key
 plugin $PAM_PLUGIN login
 verify-client-cert none
 username-as-common-name
@@ -164,8 +167,10 @@ server 10.9.0.0 255.255.255.0
 push "redirect-gateway def1 bypass-dhcp"
 push "dhcp-option DNS $Dns_1"
 push "dhcp-option DNS $Dns_2"
+push "block-ipv6"
 keepalive 10 120
 cipher AES-256-GCM
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
 user nobody
 group nogroup
 persist-key
@@ -184,7 +189,7 @@ systemctl enable openvpn-server@server-udp
 systemctl restart openvpn-server@server-tcp
 systemctl restart openvpn-server@server-udp
 
-# === WIREGUARD (UDP 51820) ===
+# === WIREGUARD (UDP 51820 & Strict Firewall) ===
 echo "Configuring WireGuard..."
 cd /etc/wireguard
 wg genkey | tee server_private.key | wg pubkey > server_public.key
@@ -195,8 +200,8 @@ Address = 10.66.66.1/24
 ListenPort = $WG_Port
 PrivateKey = $SERVER_PRIV
 SaveConfig = false
-PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE
-PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE
+PostUp = iptables -I INPUT -p udp --dport $WG_Port -j ACCEPT; iptables -I FORWARD -i $IFACE -o wg0 -j ACCEPT; iptables -I FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE
+PostDown = iptables -D INPUT -p udp --dport $WG_Port -j ACCEPT; iptables -D FORWARD -i $IFACE -o wg0 -j ACCEPT; iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE
 EOF
 chmod 600 wg0.conf server_private.key
 systemctl enable wg-quick@wg0
@@ -373,7 +378,7 @@ service
 systemctl daemon-reload
 for port in "${WsPorts[@]}"; do systemctl enable --now ws-proxy@$port; done
 
-# === XRAY CORE (Added Shadowsocks Port 8388) ===
+# === XRAY CORE ===
 echo "Installing Xray Core..."
 wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
 unzip -q /tmp/xray.zip -d /tmp/xray/; mv /tmp/xray/xray /usr/local/bin/xray; chmod +x /usr/local/bin/xray; rm -rf /tmp/xray*
@@ -479,7 +484,7 @@ WantedBy=multi-user.target
 END
 systemctl enable --now server-sldns
 
-# === HYSTERIA v1 (Sing-box) ===
+# === HYSTERIA v1 (Sing-box IPv4 Bound) ===
 warp-cli --accept-tos registration new >/dev/null 2>&1 || true
 warp-cli --accept-tos mode proxy >/dev/null 2>&1 || true
 warp-cli --accept-tos connect >/dev/null 2>&1 || true
@@ -490,10 +495,10 @@ cat << EOF > /etc/hysteria/hy1.json
   "log": { "level": "fatal" },
   "inbounds": [
     {
-      "type": "hysteria", "tag": "hy1-inbound", "listen": "::", "listen_port": ${UDP_PORT##*:},
+      "type": "hysteria", "tag": "hy1-inbound", "listen": "0.0.0.0", "listen_port": ${UDP_PORT##*:},
       "up_mbps": 100, "down_mbps": 100, "obfs": "$OBFS",
       "users": [ { "auth_str": "$PASSWORD" } ],
-      "tls": { "enabled": true, "certificate_path": "/etc/xray/xray.crt", "key_path": "/etc/xray/xray.key" }
+      "tls": { "enabled": true, "alpn": ["h3"], "certificate_path": "/etc/xray/xray.crt", "key_path": "/etc/xray/xray.key" }
     }
   ],
   "outbounds": [ 
@@ -504,18 +509,18 @@ cat << EOF > /etc/hysteria/hy1.json
   "route": { 
     "rules": [ 
       { 
-        "inbound": ["hy1-inbound"], 
+        "inbound": "hy1-inbound", 
         "network": "udp",
         "domain_suffix": [ "doubleclick.net", "googlesyndication.com", "googleadservices.com", "admob.com", "google-analytics.com", "app-measurement.com", "adservice.google.com", "g.doubleclick.net", "google.com", "pagead2.googlesyndication.com", "tpc.googlesyndication.com", "googlevideo.com", "gvt1.com", "gvt2.com", "gvt3.com", "ytimg.com", "youtube.com", "gstatic.com", "googleusercontent.com", "ggpht.com", "play.google.com", "firebaseio.com", "firebase.googleapis.com", "crashlytics.com", "fundingchoicesmessages.google.com", "imasdk.googleapis.com", "googleanalytics.com", "analytics.google.com", "fcm.googleapis.com", "mtalk.google.com", "firebaseinstallations.googleapis.com", "firebaselogging.googleapis.com", "firebaselogging-pa.googleapis.com", "firebaseremoteconfig.googleapis.com", "googleadapis.com", "accounts.google.com", "play.googleapis.com", "android.apis.google.com", "adsense.com", "1e100.net" ], 
         "outbound": "block" 
       },
       { 
-        "inbound": ["hy1-inbound"], 
+        "inbound": "hy1-inbound", 
         "domain_suffix": [ "doubleclick.net", "googlesyndication.com", "googleadservices.com", "admob.com", "google-analytics.com", "app-measurement.com", "adservice.google.com", "g.doubleclick.net", "google.com", "pagead2.googlesyndication.com", "tpc.googlesyndication.com", "googlevideo.com", "gvt1.com", "gvt2.com", "gvt3.com", "ytimg.com", "youtube.com", "gstatic.com", "googleusercontent.com", "ggpht.com", "play.google.com", "firebaseio.com", "firebase.googleapis.com", "crashlytics.com", "fundingchoicesmessages.google.com", "imasdk.googleapis.com", "googleanalytics.com", "analytics.google.com", "fcm.googleapis.com", "mtalk.google.com", "firebaseinstallations.googleapis.com", "firebaselogging.googleapis.com", "firebaselogging-pa.googleapis.com", "firebaseremoteconfig.googleapis.com", "googleadapis.com", "accounts.google.com", "play.googleapis.com", "android.apis.google.com", "adsense.com", "1e100.net" ], 
         "outbound": "warp-proxy" 
       }, 
       { 
-        "inbound": ["hy1-inbound"], 
+        "inbound": "hy1-inbound", 
         "outbound": "direct" 
       } 
     ] 
@@ -557,128 +562,51 @@ systemctl daemon-reload
 
 cat << 'EOF' > /etc/hysteria/auth.sh
 #!/bin/bash
-
 ADDR="$1"
 AUTH="$2"
 TX="$3"
-
 USER_DB="/etc/hysteria/users_v2.txt"
-
 USER_ENTRY=$(grep -w "^$AUTH" "$USER_DB" 2>/dev/null)
-
-if [ -z "$USER_ENTRY" ]; then
-    exit 1
-fi
-
+if [ -z "$USER_ENTRY" ]; then exit 1; fi
 EXP_DATE=$(echo "$USER_ENTRY" | cut -d' ' -f2-)
-
 EXP_SECONDS=$(date -d "$EXP_DATE" +%s 2>/dev/null)
 NOW_SECONDS=$(date +%s)
-
-if [ -z "$EXP_SECONDS" ] || [ "$NOW_SECONDS" -ge "$EXP_SECONDS" ]; then
-    exit 1
-fi
-
+if [ -z "$EXP_SECONDS" ] || [ "$NOW_SECONDS" -ge "$EXP_SECONDS" ]; then exit 1; fi
 echo "$AUTH"
 exit 0
 EOF
 
 chmod +x /etc/hysteria/auth.sh
-
 touch /etc/hysteria/users_v2.txt
 
 cat << EOF > /etc/hysteria/hy2.json
 {
   "listen": ":50001-60000",
-
   "tls": {
     "cert": "/etc/xray/xray.crt",
     "key": "/etc/xray/xray.key"
   },
-
-  "bandwidth": {
-    "up": "1 gbps",
-    "down": "1 gbps"
-  },
-
+  "bandwidth": { "up": "1 gbps", "down": "1 gbps" },
   "ignoreClientBandwidth": false,
-
-  "obfs": {
-    "type": "salamander",
-    "salamander": {
-      "password": "GuruzScript"
-    }
-  },
-
-  "auth": {
-    "type": "command",
-    "command": "/etc/hysteria/auth.sh"
-  },
-
-  "masquerade": {
-    "type": "proxy",
-    "proxy": {
-      "url": "https://bing.com",
-      "rewriteHost": true
-    }
-  },
-
-  "outbounds": [
-    {
-      "name": "warp",
-      "type": "socks5",
-      "socks5": {
-        "addr": "127.0.0.1:40000"
-      }
-    },
-    {
-      "name": "direct",
-      "type": "direct"
-    }
-  ],
-
+  "obfs": { "type": "salamander", "salamander": { "password": "GuruzScript" } },
+  "auth": { "type": "command", "command": "/etc/hysteria/auth.sh" },
+  "masquerade": { "type": "proxy", "proxy": { "url": "https://bing.com", "rewriteHost": true } },
+  "outbounds": [ { "name": "warp", "type": "socks5", "socks5": { "addr": "127.0.0.1:40000" } }, { "name": "direct", "type": "direct" } ],
   "acl": {
     "inline": [
-      "domain(doubleclick.net) -> warp",
-      "domain(googlesyndication.com) -> warp",
-      "domain(googleadservices.com) -> warp",
-      "domain(admob.com) -> warp",
-      "domain(google-analytics.com) -> warp",
-      "domain(app-measurement.com) -> warp",
-      "domain(adservice.google.com) -> warp",
-      "domain(g.doubleclick.net) -> warp",
-      "domain(google.com) -> warp",
-      "domain(pagead2.googlesyndication.com) -> warp",
-      "domain(tpc.googlesyndication.com) -> warp",
-      "domain(googlevideo.com) -> warp",
-      "domain(gvt1.com) -> warp",
-      "domain(gvt2.com) -> warp",
-      "domain(gvt3.com) -> warp",
-      "domain(ytimg.com) -> warp",
-      "domain(youtube.com) -> warp",
-      "domain(gstatic.com) -> warp",
-      "domain(googleusercontent.com) -> warp",
-      "domain(ggpht.com) -> warp",
-      "domain(play.google.com) -> warp",
-      "domain(firebaseio.com) -> warp",
-      "domain(firebase.googleapis.com) -> warp",
-      "domain(crashlytics.com) -> warp",
-      "domain(fundingchoicesmessages.google.com) -> warp",
-      "domain(imasdk.googleapis.com) -> warp",
-      "domain(googleanalytics.com) -> warp",
-      "domain(analytics.google.com) -> warp",
-      "domain(fcm.googleapis.com) -> warp",
-      "domain(mtalk.google.com) -> warp",
-      "domain(firebaseinstallations.googleapis.com) -> warp",
-      "domain(firebaselogging.googleapis.com) -> warp",
-      "domain(firebaselogging-pa.googleapis.com) -> warp",
-      "domain(firebaseremoteconfig.googleapis.com) -> warp",
-      "domain(googleadapis.com) -> warp",
-      "domain(accounts.google.com) -> warp",
-      "domain(play.googleapis.com) -> warp",
-      "domain(android.apis.google.com) -> warp",
-      "domain(adsense.com) -> warp",
-      "domain(1e100.net) -> warp",
+      "domain(doubleclick.net) -> warp", "domain(googlesyndication.com) -> warp", "domain(googleadservices.com) -> warp",
+      "domain(admob.com) -> warp", "domain(google-analytics.com) -> warp", "domain(app-measurement.com) -> warp",
+      "domain(adservice.google.com) -> warp", "domain(g.doubleclick.net) -> warp", "domain(google.com) -> warp",
+      "domain(pagead2.googlesyndication.com) -> warp", "domain(tpc.googlesyndication.com) -> warp", "domain(googlevideo.com) -> warp",
+      "domain(gvt1.com) -> warp", "domain(gvt2.com) -> warp", "domain(gvt3.com) -> warp", "domain(ytimg.com) -> warp",
+      "domain(youtube.com) -> warp", "domain(gstatic.com) -> warp", "domain(googleusercontent.com) -> warp", "domain(ggpht.com) -> warp",
+      "domain(play.google.com) -> warp", "domain(firebaseio.com) -> warp", "domain(firebase.googleapis.com) -> warp",
+      "domain(crashlytics.com) -> warp", "domain(fundingchoicesmessages.google.com) -> warp", "domain(imasdk.googleapis.com) -> warp",
+      "domain(googleanalytics.com) -> warp", "domain(analytics.google.com) -> warp", "domain(fcm.googleapis.com) -> warp",
+      "domain(mtalk.google.com) -> warp", "domain(firebaseinstallations.googleapis.com) -> warp", "domain(firebaselogging.googleapis.com) -> warp",
+      "domain(firebaselogging-pa.googleapis.com) -> warp", "domain(firebaseremoteconfig.googleapis.com) -> warp",
+      "domain(googleadapis.com) -> warp", "domain(accounts.google.com) -> warp", "domain(play.googleapis.com) -> warp",
+      "domain(android.apis.google.com) -> warp", "domain(adsense.com) -> warp", "domain(1e100.net) -> warp",
       "all -> direct"
     ]
   }
@@ -686,14 +614,10 @@ cat << EOF > /etc/hysteria/hy2.json
 EOF
 
 echo "Skipping strict validation and starting Hysteria 2..."
-
 systemctl enable --now hysteria-server.service
 
-iptables -I INPUT -p udp --dport ${UDP_PORT##*:} -j ACCEPT
-iptables -I INPUT -p udp --dport ${UDP_PORT2##*:} -j ACCEPT
-
+iptables -I INPUT -p udp --dport 50001:60000 -j ACCEPT
 iptables -t nat -A PREROUTING -i $IFACE -p udp --dport 20000:50000 -j DNAT --to-destination ${UDP_PORT}
-
 netfilter-persistent save
 
 cat > /etc/systemd/system/hysteria-nat.service <<EOF
@@ -705,13 +629,11 @@ Before=hysteria-v1.service hysteria-server.service
 
 [Service]
 Type=oneshot
-
 ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712)'
 ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport 36712 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36712 -j ACCEPT'
-ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport 36713 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36713 -j ACCEPT'
+ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport 50001:60000 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 50001:60000 -j ACCEPT'
 
 RemainAfterExit=yes
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -734,7 +656,7 @@ chmod 777 /var/run/sslh/sslh.pid
 iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53 -j ACCEPT
 IFACE=$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)
 iptables -C INPUT -p udp --dport 36712 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36712 -j ACCEPT
-iptables -C INPUT -p udp --dport 36713 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36713 -j ACCEPT
+iptables -C INPUT -p udp --dport 50001:60000 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 50001:60000 -j ACCEPT
 
 iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
 
@@ -824,7 +746,7 @@ add_hysteria_v1() {
     echo -e "  ${BOLD}Expiry Date${NC}: ${YELLOW}${exp_date}${NC}"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     echo -e "${BOLD}[ HYSTERIA V1 (Legacy) ]${NC}"
-    echo -e "${YELLOW}hysteria://${DOMAIN}:36712/?insecure=1&peer=${DOMAIN}&auth=${new_pass}&obfsParam=${OBFS_V1}&upmbps=100&downmbps=100&alpn=h3#${new_pass}-HY1${NC}"
+    echo -e "${YELLOW}hysteria://${DOMAIN:-$(server_ip)}:36712/?insecure=1&peer=${DOMAIN:-$(server_ip)}&auth=${new_pass}&obfsParam=${OBFS_V1}&upmbps=100&downmbps=100&alpn=h3#${new_pass}-HY1${NC}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     pause_return
 }
@@ -953,7 +875,7 @@ add_hysteria_v2() {
     echo -e "  ${BOLD}Expiry Date${NC}: ${YELLOW}${exp_date}${NC}"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     echo -e "${BOLD}[ HYSTERIA V2 (Native) ]${NC}"
-    echo -e "${YELLOW}hysteria2://${new_pass}@${DOMAIN}:50001/?sni=${DOMAIN}&insecure=1&obfs=salamander&obfs-password=GuruzScript#${new_pass}-HY2${NC}\n"
+    echo -e "${YELLOW}hysteria2://${new_pass}@${DOMAIN}:50001-60000/?sni=${DOMAIN}&insecure=1&obfs=salamander&obfs-password=GuruzScript#${new_pass}-HY2${NC}\n"
     pause_return
 }
 
@@ -1028,7 +950,7 @@ add_xray() {
   echo -e " [1] VLESS (TLS & NTLS)"
   echo -e " [2] VMESS (TLS & NTLS)"
   echo -e " [3] TROJAN (TLS)"
-  echo -e " [4] SHADOWSOCKS (AEAD)"
+  echo -e " [4] SHADOWSOCKS (AEAD / 2022)"
   echo -e " [5] ALL-IN-ONE (All Protocols)"
   read -rp " Select Protocol: " prot
   read -rp " Username: " user
@@ -1044,9 +966,21 @@ add_xray() {
   CURRENT_NS=$(grep 'ExecStart=' /etc/systemd/system/server-sldns.service 2>/dev/null | sed 's/.*server\.key \([^ ]*\) .*/\1/')
 
   if [ "$prot" == "4" ] || [ "$prot" == "5" ]; then
-    ss_pass=$(cat /proc/sys/kernel/random/uuid | sed 's/-//g' | head -c 16)
-    jq ".inbounds[6].settings.clients += [{\"password\": \"$ss_pass\", \"method\": \"chacha20-ietf-poly1305\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
-    echo "$user $ss_pass $exp" >> /etc/xray/shadowsocks.txt
+    echo -e "\n  ${CYAN}Select Shadowsocks Encryption:${NC}"
+    echo -e "  [1] Legacy (chacha20-ietf-poly1305) - ${GREEN}Universal Compatibility${NC}"
+    echo -e "  [2] SS-2022 (2022-blake3) - ${YELLOW}Maximum Anti-Censorship (Modern Apps Only)${NC}"
+    read -rp "  ► Option: " ss_opt
+
+    if [ "$ss_opt" == "2" ]; then
+        ss_method="2022-blake3-chacha20-poly1305"
+        ss_pass=$(openssl rand -base64 32)
+    else
+        ss_method="chacha20-ietf-poly1305"
+        ss_pass=$(cat /proc/sys/kernel/random/uuid | sed 's/-//g' | head -c 16)
+    fi
+
+    jq ".inbounds[6].settings.clients += [{\"password\": \"$ss_pass\", \"method\": \"$ss_method\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+    echo "$user $ss_pass $exp $ss_method" >> /etc/xray/shadowsocks.txt
   fi
   if [ "$prot" == "1" ] || [ "$prot" == "5" ]; then
     jq ".inbounds[0].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[3].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[4].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
@@ -1085,7 +1019,12 @@ add_xray() {
     echo -e "\n${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
   fi
   if [ "$prot" == "4" ] || [ "$prot" == "5" ]; then
-    echo -e "\n${YELLOW}[ SHADOWSOCKS ]${NC}\nss://$(echo -n "chacha20-ietf-poly1305:${ss_pass}" | base64 -w 0)@${DOMAIN}:8388#${user}"
+    ss_payload=$(echo -n "${ss_method}:${ss_pass}" | base64 -w 0)
+    if [ "$ss_method" == "2022-blake3-chacha20-poly1305" ]; then
+        echo -e "\n${YELLOW}[ SHADOWSOCKS 2022 ]${NC}\nss://${ss_payload}@${DOMAIN}:8388#${user}"
+    else
+        echo -e "\n${YELLOW}[ SHADOWSOCKS (Legacy) ]${NC}\nss://${ss_payload}@${DOMAIN}:8388#${user}"
+    fi
   fi
 
   echo -e "\n${CYAN}--------------------------------------------------------------${NC}"
@@ -1144,7 +1083,13 @@ renew_xray() {
     if grep -qw "^$user" "/etc/xray/${proto}.txt"; then
       current_exp=$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $3}')
       new_exp=$(date -d "$current_exp + $days days" +"%Y-%m-%d")
-      sed -i "s/^$user .* $current_exp/$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $1 " " $2}') $new_exp/" "/etc/xray/${proto}.txt"
+      if [ "$proto" == "shadowsocks" ]; then
+          ss_method=$(grep -w "^$user" "/etc/xray/shadowsocks.txt" | awk '{print $4}')
+          ss_pass=$(grep -w "^$user" "/etc/xray/shadowsocks.txt" | awk '{print $2}')
+          sed -i "s/^$user .* $current_exp.*/$user $ss_pass $new_exp $ss_method/" "/etc/xray/shadowsocks.txt"
+      else
+          sed -i "s/^$user .* $current_exp/$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $1 " " $2}') $new_exp/" "/etc/xray/${proto}.txt"
+      fi
     fi
   done
   echo -e "\n${GREEN}✔ User '$user' renewed successfully.${NC}\nNew Expiry: $new_exp"
@@ -1180,7 +1125,17 @@ show_xray() {
   fi
   if grep -qw "^$user" /etc/xray/shadowsocks.txt; then
     ss_pass=$(grep -w "^$user" /etc/xray/shadowsocks.txt | awk '{print $2}')
-    echo -e "${YELLOW}[ SHADOWSOCKS ]${NC}\nss://$(echo -n "chacha20-ietf-poly1305:${ss_pass}" | base64 -w 0)@${DOMAIN}:8388#${user}\n"
+    ss_method=$(grep -w "^$user" /etc/xray/shadowsocks.txt | awk '{print $4}')
+    
+    if [ -z "$ss_method" ]; then ss_method="chacha20-ietf-poly1305"; fi
+
+    ss_payload=$(echo -n "${ss_method}:${ss_pass}" | base64 -w 0)
+    
+    if [ "$ss_method" == "2022-blake3-chacha20-poly1305" ]; then
+        echo -e "${YELLOW}[ SHADOWSOCKS 2022 ]${NC}\nss://${ss_payload}@${DOMAIN}:8388#${user}\n"
+    else
+        echo -e "${YELLOW}[ SHADOWSOCKS (Legacy) ]${NC}\nss://${ss_payload}@${DOMAIN}:8388#${user}\n"
+    fi
     found=1
   fi
   
@@ -1213,7 +1168,7 @@ PresharedKey = $PSK
 AllowedIPs = ${CLIENT_IP}/32
 # END_PEER $user
 EOF
-  systemctl restart wg-quick@wg0
+  wg syncconf wg0 <(wg-quick strip wg0)
 
   cat <<EOF > /home/vps/public_html/${user}-wg.conf
 [Interface]
@@ -1270,7 +1225,7 @@ wg_menu() {
          if ! grep -q "^# BEGIN_PEER $user$" /etc/wireguard/wg0.conf; then echo "User not found!"; pause_return; continue; fi
          sed -i "/^# BEGIN_PEER $user$/,/^# END_PEER $user$/d" /etc/wireguard/wg0.conf
          rm -f /home/vps/public_html/${user}-wg.conf
-         systemctl restart wg-quick@wg0
+         wg syncconf wg0 <(wg-quick strip wg0)
          echo -e "\n${GREEN}✔ User $user deleted successfully!${NC}"
          pause_return 
          ;;
@@ -1379,7 +1334,7 @@ generate_ovpn() {
   echo -e "                   ${BOLD}OPENVPN CONFIG GENERATOR${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   echo -e "Generating OpenVPN Profiles..."
-  BASE_CONF="client\ndev tun\nresolv-retry infinite\nnobind\npersist-key\npersist-tun\nauth-user-pass\ncipher AES-256-GCM\nauth SHA256\nkey-direction 1\n<ca>\n$(cat /etc/openvpn/server/ca.crt)\n</ca>\n<tls-auth>\n$(cat /etc/openvpn/server/ta.key)\n</tls-auth>"
+  BASE_CONF="client\ndev tun\nresolv-retry infinite\nnobind\npersist-key\npersist-tun\nauth-user-pass\ncipher AES-256-GCM\ndata-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305\nignore-unknown-option block-outside-dns\nsetenv opt block-outside-dns\nauth SHA256\n<ca>\n$(cat /etc/openvpn/server/ca.crt)\n</ca>\n<tls-crypt>\n$(cat /etc/openvpn/server/tc.key)\n</tls-crypt>"
   
   echo -e "$BASE_CONF\nproto udp\nremote $(server_ip) 2200" > /home/vps/public_html/udp-2200.ovpn
   echo -e "$BASE_CONF\nproto tcp\nremote $(server_ip) 1194" > /home/vps/public_html/tcp-1194.ovpn
