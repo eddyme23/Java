@@ -1,3 +1,8 @@
+Here is your complete, fully integrated `xfull.sh` script. It includes the split between Sing-box (Hysteria V1) and Native Hysteria 2, the multi-user background authentication engine for V2, and the fully interactive English streaming checker you requested.
+
+You can copy and paste this entire block to replace your existing script. Do not trim anything.
+
+```bash
 #!/bin/bash
 set -o pipefail
 
@@ -1539,7 +1544,7 @@ utilities_menu() {
     echo -e "                   ${BOLD}SYSTEM UTILITIES${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "  [${YELLOW}1${NC}] Enable Native Kernel BBR"
-    echo -e "  [${YELLOW}2${NC}] Check Netflix & Streaming Unlocks"
+    echo -e "  [${YELLOW}2${NC}] Check Netflix & Streaming Unlocks (Deep Scan)"
     echo -e "  [${YELLOW}0${NC}] Back\n"
     read -rp "  Select an option: " subopt
     case "$subopt" in 
@@ -1554,7 +1559,9 @@ utilities_menu() {
         ;; 
       2) 
         clear
-        bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -E -M 0
+        echo -e "${YELLOW}Running Region Restriction Check (English)...${NC}\n"
+        bash <(curl -sL https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/check.sh) -E en
+        echo ""
         pause_return 
         ;; 
       0) break ;; 
@@ -1679,3 +1686,5 @@ figlet GuruzGH Script | lolcat
 echo "Installation Complete! Rebooting in 5s..."
 sleep 5
 reboot
+
+```
