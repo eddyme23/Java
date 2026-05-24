@@ -485,7 +485,7 @@ warp-cli --accept-tos mode proxy >/dev/null 2>&1 || true
 warp-cli --accept-tos connect >/dev/null 2>&1 || true
 bash <(curl -fsSL https://sing-box.app/deb-install.sh) >/dev/null 2>&1
 mkdir -p /etc/hysteria
-cat << EOF > /etc/hysteria/config.json
+cat << EOF > /etc/hysteria/hy1.json
 {
   "log": { "level": "fatal" },
   "inbounds": [
@@ -527,7 +527,7 @@ cat > /etc/systemd/system/hysteria-v1.service <<EOF
 [Unit]
 Description=Sing-Box Hysteria V1 Core
 [Service]
-ExecStart=/usr/bin/sing-box run -c /etc/hysteria/config.json
+ExecStart=/usr/local/bin/sing-box run -c /etc/hysteria/hy1.json
 Restart=on-failure
 LimitNOFILE=1048576
 [Install]
@@ -538,99 +538,171 @@ systemctl daemon-reload; systemctl enable --now hysteria-v1
 # === NATIVE HYSTERIA v2 ===
 bash <(curl -fsSL https://get.hy2.sh/) >/dev/null 2>&1
 
+cat > /etc/systemd/system/hysteria-server.service <<EOF
+[Unit]
+Description=Hysteria Server Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hysteria server -c /etc/hysteria/hy2.json
+Restart=on-failure
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+
 cat << 'EOF' > /etc/hysteria/auth.sh
 #!/bin/bash
-AUTH=$2
+
+ADDR="$1"
+AUTH="$2"
+TX="$3"
+
 USER_DB="/etc/hysteria/users_v2.txt"
 
 USER_ENTRY=$(grep -w "^$AUTH" "$USER_DB" 2>/dev/null)
-if [ -z "$USER_ENTRY" ]; then exit 1; fi
 
-EXP_DATE=$(echo "$USER_ENTRY" | awk '{print $2, $3}')
+if [ -z "$USER_ENTRY" ]; then
+    exit 1
+fi
+
+EXP_DATE=$(echo "$USER_ENTRY" | cut -d' ' -f2-)
+
 EXP_SECONDS=$(date -d "$EXP_DATE" +%s 2>/dev/null)
 NOW_SECONDS=$(date +%s)
 
-if [ -z "$EXP_SECONDS" ] || [ "$NOW_SECONDS" -ge "$EXP_SECONDS" ]; then exit 1; fi
+if [ -z "$EXP_SECONDS" ] || [ "$NOW_SECONDS" -ge "$EXP_SECONDS" ]; then
+    exit 1
+fi
 
 echo "$AUTH"
 exit 0
 EOF
 
 chmod +x /etc/hysteria/auth.sh
+
 touch /etc/hysteria/users_v2.txt
 
-cat << EOF > /etc/hysteria/config.yaml
-listen: :${UDP_PORT2##*:}
+cat << EOF > /etc/hysteria/hy2.json
+{
+  "listen": ":50001-60000",
 
-tls:
-  cert: /etc/xray/xray.crt
-  key: /etc/xray/xray.key
+  "tls": {
+    "cert": "/etc/xray/xray.crt",
+    "key": "/etc/xray/xray.key"
+  },
 
-auth:
-  type: command
-  command: /etc/hysteria/auth.sh
+  "bandwidth": {
+    "up": "1 gbps",
+    "down": "1 gbps"
+  },
 
-masquerade:
-  type: proxy
-  proxy:
-    url: https://bing.com
-    rewriteHost: true
+  "ignoreClientBandwidth": false,
 
-outbounds:
-  - name: warp
-    type: socks5
-    server: 127.0.0.1:40000
-    
-acl:
-  inline:
-    - out(warp): domain(doubleclick.net)
-    - out(warp): domain(googlesyndication.com)
-    - out(warp): domain(googleadservices.com)
-    - out(warp): domain(admob.com)
-    - out(warp): domain(google-analytics.com)
-    - out(warp): domain(app-measurement.com)
-    - out(warp): domain(adservice.google.com)
-    - out(warp): domain(g.doubleclick.net)
-    - out(warp): domain(google.com)
-    - out(warp): domain(pagead2.googlesyndication.com)
-    - out(warp): domain(tpc.googlesyndication.com)
-    - out(warp): domain(googlevideo.com)
-    - out(warp): domain(gvt1.com)
-    - out(warp): domain(gvt2.com)
-    - out(warp): domain(gvt3.com)
-    - out(warp): domain(ytimg.com)
-    - out(warp): domain(youtube.com)
-    - out(warp): domain(gstatic.com)
-    - out(warp): domain(googleusercontent.com)
-    - out(warp): domain(ggpht.com)
-    - out(warp): domain(play.google.com)
-    - out(warp): domain(firebaseio.com)
-    - out(warp): domain(firebase.googleapis.com)
-    - out(warp): domain(crashlytics.com)
-    - out(warp): domain(fundingchoicesmessages.google.com)
-    - out(warp): domain(imasdk.googleapis.com)
-    - out(warp): domain(googleanalytics.com)
-    - out(warp): domain(analytics.google.com)
-    - out(warp): domain(fcm.googleapis.com)
-    - out(warp): domain(mtalk.google.com)
-    - out(warp): domain(firebaseinstallations.googleapis.com)
-    - out(warp): domain(firebaselogging.googleapis.com)
-    - out(warp): domain(firebaselogging-pa.googleapis.com)
-    - out(warp): domain(firebaseremoteconfig.googleapis.com)
-    - out(warp): domain(googleadapis.com)
-    - out(warp): domain(accounts.google.com)
-    - out(warp): domain(play.googleapis.com)
-    - out(warp): domain(android.apis.google.com)
-    - out(warp): domain(adsense.com)
-    - out(warp): domain(1e100.net)
-    - out(direct): all
+  "obfs": {
+    "type": "salamander",
+    "salamander": {
+      "password": "GuruzScript"
+    }
+  },
+
+  "auth": {
+    "type": "command",
+    "command": "/etc/hysteria/auth.sh"
+  },
+
+  "masquerade": {
+    "type": "proxy",
+    "proxy": {
+      "url": "https://bing.com",
+      "rewriteHost": true
+    }
+  },
+
+  "outbounds": [
+    {
+      "name": "warp",
+      "type": "socks5",
+      "socks5": {
+        "addr": "127.0.0.1:40000"
+      }
+    },
+    {
+      "name": "direct",
+      "type": "direct"
+    }
+  ],
+
+  "acl": {
+    "inline": [
+      "domain(doubleclick.net) -> warp",
+      "domain(googlesyndication.com) -> warp",
+      "domain(googleadservices.com) -> warp",
+      "domain(admob.com) -> warp",
+      "domain(google-analytics.com) -> warp",
+      "domain(app-measurement.com) -> warp",
+      "domain(adservice.google.com) -> warp",
+      "domain(g.doubleclick.net) -> warp",
+      "domain(google.com) -> warp",
+      "domain(pagead2.googlesyndication.com) -> warp",
+      "domain(tpc.googlesyndication.com) -> warp",
+      "domain(googlevideo.com) -> warp",
+      "domain(gvt1.com) -> warp",
+      "domain(gvt2.com) -> warp",
+      "domain(gvt3.com) -> warp",
+      "domain(ytimg.com) -> warp",
+      "domain(youtube.com) -> warp",
+      "domain(gstatic.com) -> warp",
+      "domain(googleusercontent.com) -> warp",
+      "domain(ggpht.com) -> warp",
+      "domain(play.google.com) -> warp",
+      "domain(firebaseio.com) -> warp",
+      "domain(firebase.googleapis.com) -> warp",
+      "domain(crashlytics.com) -> warp",
+      "domain(fundingchoicesmessages.google.com) -> warp",
+      "domain(imasdk.googleapis.com) -> warp",
+      "domain(googleanalytics.com) -> warp",
+      "domain(analytics.google.com) -> warp",
+      "domain(fcm.googleapis.com) -> warp",
+      "domain(mtalk.google.com) -> warp",
+      "domain(firebaseinstallations.googleapis.com) -> warp",
+      "domain(firebaselogging.googleapis.com) -> warp",
+      "domain(firebaselogging-pa.googleapis.com) -> warp",
+      "domain(firebaseremoteconfig.googleapis.com) -> warp",
+      "domain(googleadapis.com) -> warp",
+      "domain(accounts.google.com) -> warp",
+      "domain(play.googleapis.com) -> warp",
+      "domain(android.apis.google.com) -> warp",
+      "domain(adsense.com) -> warp",
+      "domain(1e100.net) -> warp",
+      "all -> direct"
+    ]
+  }
+}
 EOF
-systemctl daemon-reload; systemctl enable --now hysteria-server.service
+
+echo "Validating Hysteria 2 configuration..."
+
+if hysteria server -c /etc/hysteria/hy2.json --test >/dev/null 2>&1; then
+    echo "Hysteria 2 configuration is valid."
+else
+    echo "Hysteria 2 configuration validation failed."
+    hysteria server -c /etc/hysteria/hy2.json --test
+    exit 1
+fi
+
+systemctl enable --now hysteria-server.service
 
 iptables -I INPUT -p udp --dport ${UDP_PORT##*:} -j ACCEPT
 iptables -I INPUT -p udp --dport ${UDP_PORT2##*:} -j ACCEPT
+
 iptables -t nat -A PREROUTING -i $IFACE -p udp --dport 20000:50000 -j DNAT --to-destination ${UDP_PORT}
-iptables -t nat -A PREROUTING -i $IFACE -p udp --dport 50001:60000 -j DNAT --to-destination ${UDP_PORT2}
+
+netfilter-persistent save
 
 cat > /etc/systemd/system/hysteria-nat.service <<EOF
 [Unit]
@@ -638,16 +710,21 @@ Description=Restore Hysteria UDP NAT rule
 After=network-online.target
 Wants=network-online.target
 Before=hysteria-v1.service hysteria-server.service
+
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT)'
-ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713)'
-ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport $HYST_PORT -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport $HYST_PORT -j ACCEPT'
+
+ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712)'
+ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport 36712 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36712 -j ACCEPT'
 ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport 36713 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36713 -j ACCEPT'
+
 RemainAfterExit=yes
+
 [Install]
 WantedBy=multi-user.target
 EOF
+
+systemctl daemon-reload
 systemctl enable hysteria-nat.service
 
 # Creating startup script
@@ -664,8 +741,11 @@ chmod 777 /var/run/sslh/sslh.pid
 
 iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53 -j ACCEPT
 IFACE=$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)
+iptables -C INPUT -p udp --dport 36712 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36712 -j ACCEPT
+iptables -C INPUT -p udp --dport 36713 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36713 -j ACCEPT
+
 iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
-iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713
+
 deekayz
 
 sed -i "s|MyTimeZone|$MyVPS_Time|g" /etc/deekaystartup
@@ -696,7 +776,7 @@ cat > /usr/local/bin/menu <<'EOF_MENU'
 RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; BLUE='\033[1;34m'; CYAN='\033[1;36m'; WHITE='\033[1;37m'; NC='\033[0m'; BOLD='\033[1m'
 DOMAIN=$(cat /etc/deekayvpn/domain.txt 2>/dev/null || curl -4 -s --max-time 2 ipv4.icanhazip.com)
 
-HYST_CONFIG_V1="/etc/hysteria/config.json"
+HYST_CONFIG_V1="/etc/hysteria/hy1.json"
 HYST_USER_DB_V1="/etc/hysteria/users.txt"
 HYST_USER_DB_V2="/etc/hysteria/users_v2.txt"
 touch "$HYST_USER_DB_V1" "$HYST_USER_DB_V2" 2>/dev/null || true
@@ -881,7 +961,7 @@ add_hysteria_v2() {
     echo -e "  ${BOLD}Expiry Date${NC}: ${YELLOW}${exp_date}${NC}"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     echo -e "${BOLD}[ HYSTERIA V2 (Native) ]${NC}"
-    echo -e "${YELLOW}hysteria2://${new_pass}@${DOMAIN}:36713/?insecure=1&sni=${DOMAIN}&obfs=salamander&obfs-password=GuruzScript#${new_pass}-HY2${NC}\n"
+    echo -e "${YELLOW}hysteria2://${new_pass}@${DOMAIN}:50001/?sni=${DOMAIN}&insecure=1&obfs=salamander&obfs-password=GuruzScript#${new_pass}-HY2${NC}\n"
     pause_return
 }
 
