@@ -1,8 +1,3 @@
-Here is your complete, fully integrated `xfull.sh` script. It includes the split between Sing-box (Hysteria V1) and Native Hysteria 2, the multi-user background authentication engine for V2, and the fully interactive English streaming checker you requested.
-
-You can copy and paste this entire block to replace your existing script. Do not trim anything.
-
-```bash
 #!/bin/bash
 set -o pipefail
 
@@ -1686,5 +1681,3 @@ figlet GuruzGH Script | lolcat
 echo "Installation Complete! Rebooting in 5s..."
 sleep 5
 reboot
-
-```
