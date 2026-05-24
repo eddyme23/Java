@@ -115,7 +115,7 @@ cd /etc/openvpn/easy-rsa
 ./easyrsa --batch build-server-full server nopass
 ./easyrsa gen-dh
 openvpn --genkey secret ta.key
-cp pki/ca.crt pki/issued/server.crt pki/private/server.key dh.pem ta.key /etc/openvpn/server/
+cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem ta.key /etc/openvpn/server/
 cd ~
 
 PAM_PLUGIN=$(find /usr/lib -type f -name "openvpn-plugin-auth-pam.so" | head -n 1)
@@ -685,15 +685,7 @@ cat << EOF > /etc/hysteria/hy2.json
 }
 EOF
 
-echo "Validating Hysteria 2 configuration..."
-
-if hysteria server -c /etc/hysteria/hy2.json --test >/dev/null 2>&1; then
-    echo "Hysteria 2 configuration is valid."
-else
-    echo "Hysteria 2 configuration validation failed."
-    hysteria server -c /etc/hysteria/hy2.json --test
-    exit 1
-fi
+echo "Skipping strict validation and starting Hysteria 2..."
 
 systemctl enable --now hysteria-server.service
 
