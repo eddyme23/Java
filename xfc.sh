@@ -510,7 +510,7 @@ systemctl restart "$NGINX_SERVICE"
 rm -rf /etc/squid/squid.con*
 cat <<'mySquid' > /etc/squid/squid.conf
 acl server dst IP-ADDRESS/32 localhost
-acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 36712
+acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 36712 36713
 http_port Squid_Port1
 http_port Squid_Port2
 http_access allow server
@@ -625,12 +625,18 @@ WantedBy=multi-user.target
 END
 systemctl daemon-reload; systemctl enable server-sldns; systemctl restart server-sldns
 
-# === HYSTERIA v1 (Sing-box v1.8.14 - Last Supported Version) & WARP ===
+# === HYSTERIA v1 (Sing-box v1.8.14) & CLOUDFLARE WARP ===
 curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
 apt-get update && apt-get install -y cloudflare-warp
+
+warp-cli --accept-tos disconnect 2>/dev/null || true
 warp-cli --accept-tos registration delete 2>/dev/null || true
-warp-cli --accept-tos registration new; warp-cli --accept-tos mode proxy; warp-cli --accept-tos connect
+warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register
+warp-cli --accept-tos mode proxy
+warp-cli --accept-tos proxy port 40000
+warp-cli --accept-tos connect
+sleep 2
 
 wget -qO /tmp/sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v1.8.14/sing-box_1.8.14_linux_amd64.deb"
 dpkg -i /tmp/sing-box.deb
@@ -640,6 +646,84 @@ rm -f /tmp/sing-box.deb
 mkdir -p /etc/hysteria
 HYST_PORT="${UDP_PORT##*:}"
 
+cat << EOF > /etc/hysteria/hysteria.crt
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number: 40:26:da:91:18:2b:77:9c:85:6a:0c:bb:ca:90:53:fe
+        Signature Algorithm: sha256WithRSAEncryption
+        Issuer: CN=KobZ
+        Validity
+            Not Before: Jul 22 22:23:55 2020 GMT
+            Not After : Jul 20 22:23:55 2030 GMT
+        Subject: CN=server
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+                RSA Public-Key: (1024 bit)
+                Modulus:
+                    00:ce:35:23:d8:5d:9f:b6:9b:cb:6a:89:e1:90:af:
+                    42:df:5f:f8:bd:ad:a7:78:9a:ca:20:f0:3d:5b:d6:
+                    c9:ef:4c:4a:99:96:c3:38:fd:59:b4:d7:65:ed:d4:
+                    a7:fa:ab:03:e2:be:88:2f:ca:fc:90:dd:b0:b7:bc:
+                    23:cb:83:ac:36:e2:01:57:69:64:b8:e1:9e:51:f0:
+                    a6:9d:13:d9:92:6b:4d:04:a6:10:64:a3:3f:6b:ff:
+                    fe:32:ac:91:63:c2:71:24:be:9e:76:4f:87:cc:3a:
+                    03:a1:9e:48:3f:11:92:33:3b:19:16:9c:d0:5d:16:
+                    ee:c1:42:67:99:47:66:67:67
+                Exponent: 65537 (0x10001)
+        X509v3 extensions:
+            X509v3 Basic Constraints: CA:FALSE
+            X509v3 Subject Key Identifier: 6B:08:C0:64:10:71:A8:32:7F:0B:FE:1E:98:1F:BD:72:74:0F:C8:66
+            X509v3 Authority Key Identifier: keyid:64:49:32:6F:FE:66:62:F1:57:4D:BB:91:A8:5D:BD:26:3E:51:A4:D2
+                DirName:/CN=KobZ
+                serial:01:A4:01:02:93:12:D9:D6:01:A9:83:DC:03:73:DA:ED:C8:E3:C3:B7
+            X509v3 Extended Key Usage: TLS Web Server Authentication
+            X509v3 Key Usage: Digital Signature, Key Encipherment
+            X509v3 Subject Alternative Name: DNS:server
+    Signature Algorithm: sha256WithRSAEncryption
+         a1:3e:ac:83:0b:e5:5d:ca:36:b7:d0:ab:d0:d9:73:66:d1:62:
+         88:ce:3d:47:9e:08:0b:a0:5b:51:13:fc:7e:d7:6e:17:0e:bd:
+         f5:d9:a9:d9:06:78:52:88:5a:e5:df:d3:32:22:4a:4b:08:6f:
+         b1:22:80:4f:19:d1:5f:9d:b6:5a:17:f7:ad:70:a9:04:00:ff:
+         fe:84:aa:e1:cb:0e:74:c0:1a:75:0b:3e:98:90:1d:22:ba:a4:
+         7a:26:65:7d:d1:3b:5c:45:a1:77:22:ed:b6:6b:18:a3:c4:ee:
+         3e:06:bb:0b:ec:12:ac:16:a5:50:b3:ed:46:43:87:72:fd:75:8c:38
+-----BEGIN CERTIFICATE-----
+MIICVDCCAb2gAwIBAgIQQCbakRgrd5yFagy7ypBT/jANBgkqhkiG9w0BAQsFADAP
+MQ0wCwYDVQQDDARLb2JaMB4XDTIwMDcyMjIyMjM1NVoXDTMwMDcyMDIyMjM1NVow
+ETEPMA0GA1UEAwwGc2VydmVyMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDO
+NSPYXZ+2m8tqieGQr0LfX/i9rad4msog8D1b1snvTEqZlsM4/Vm012Xt1Kf6qwPi
+vogvyvyQ3bC3vCPLg6w24gFXaWS44Z5R8KadE9mSa00EphBkoz9r//4yrJFjwnEk
+vp52T4fMOgOhnkg/EZIzOxkWnNBdFu7BQmeZR2ZnZwIDAQABo4GuMIGrMAkGA1Ud
+EwQCMAAwHQYDVR0OBBYEFGsIwGQQcagyfwv+HpgfvXJ0D8hmMEoGA1UdIwRDMEGA
+FGRJMm/+ZmLxV027kahdvSY+UaTSoROkETAPMQ0wCwYDVQQDDARLb2JaghQBpAEC
+kxLZ1gGpg9wDc9rtyOPDtzATBgNVHSUEDDAKBggrBgEFBQcDATALBgNVHQ8EBAMC
+BaAwEQYDVR0RBAowCIIGc2VydmVyMA0GCSqGSIb3DQEBCwUAA4GBAKE+rIML5V3K
+NrfQq9DZc2bRYojOPUeeCAugW1ET/H7XbhcOvfXZqdkGeFKIWuXf0zIiSksIb7Ei
+gE8Z0V+dtloX961wqQQA//6EquHLDnTAGnULPpiQHSK6pHomZX3RO1xFoXci7bZr
+GKPE7j4GuwvsEqwWpVCz7UZDh3L9dYw4
+-----END CERTIFICATE-----
+EOF
+
+cat << EOF > /etc/hysteria/hysteria.key
+-----BEGIN PRIVATE KEY-----
+MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAM41I9hdn7aby2qJ
+4ZCvQt9f+L2tp3iayiDwPVvWye9MSpmWwzj9WbTXZe3Up/qrA+K+iC/K/JDdsLe8
+I8uDrDbiAVdpZLjhnlHwpp0T2ZJrTQSmEGSjP2v//jKskWPCcSS+nnZPh8w6A6Ge
+SD8RkjM7GRac0F0W7sFCZ5lHZmdnAgMBAAECgYAFNrC+UresDUpaWjwaxWOidDG8
+0fwu/3Lm3Ewg21BlvX8RXQ94jGdNPDj2h27r1pEVlY2p767tFr3WF2qsRZsACJpI
+qO1BaSbmhek6H++Fw3M4Y/YY+JD+t1eEBjJMa+DR5i8Vx3AE8XOdTXmkl/xK4jaB
+EmLYA7POyK+xaDCeEQJBAPJadiYd3k9OeOaOMIX+StCs9OIMniRz+090AJZK4CMd
+jiOJv0mbRy945D/TkcqoFhhScrke9qhgZbgFj11VbDkCQQDZ0aKBPiZdvDMjx8WE
+y7jaltEDINTCxzmjEBZSeqNr14/2PG0X4GkBL6AAOLjEYgXiIvwfpoYE6IIWl3re
+ebCfAkAHxPimrixzVGux0HsjwIw7dl//YzIqrwEugeSG7O2Ukpz87KySOoUks3Z1
+yV2SJqNWskX1Q1Xa/gQkyyDWeCeZAkAbyDBI+ctc8082hhl8WZunTcs08fARM+X3
+FWszc+76J1F2X7iubfIWs6Ndw95VNgd4E2xDATNg1uMYzJNgYvcTAkBoE8o3rKkp
+em2n0WtGh6uXI9IC29tTQGr3jtxLckN/l9KsJ4gabbeKNoes74zdena1tRdfGqUG
+JQbf7qSE3mg2
+-----END PRIVATE KEY-----
+EOF
+
 cat > /etc/hysteria/config.json <<EOF
 {
   "log": { "level": "fatal" },
@@ -647,12 +731,12 @@ cat > /etc/hysteria/config.json <<EOF
     {
       "type": "hysteria",
       "tag": "hy1-inbound",
-      "listen": "0.0.0.0",
+      "listen": "::",
       "listen_port": $HYST_PORT,
       "up_mbps": 100, "down_mbps": 100,
       "obfs": "$OBFS",
       "users": [ { "auth_str": "$PASSWORD" } ],
-      "tls": { "enabled": true, "alpn": ["h3"], "certificate_path": "/etc/xray/xray.crt", "key_path": "/etc/xray/xray.key" }
+      "tls": { "enabled": true, "certificate_path": "/etc/hysteria/hysteria.crt", "key_path": "/etc/hysteria/hysteria.key" }
     }
   ],
   "outbounds": [
@@ -673,16 +757,14 @@ cat > /etc/hysteria/config.json <<EOF
         "domain_suffix": [ "doubleclick.net", "googlesyndication.com", "googleadservices.com", "admob.com", "google-analytics.com", "app-measurement.com", "adservice.google.com", "g.doubleclick.net", "google.com", "pagead2.googlesyndication.com", "tpc.googlesyndication.com", "googlevideo.com", "gvt1.com", "gvt2.com", "gvt3.com", "ytimg.com", "youtube.com", "gstatic.com", "googleusercontent.com", "ggpht.com", "play.google.com", "firebaseio.com", "firebase.googleapis.com", "crashlytics.com", "fundingchoicesmessages.google.com", "imasdk.googleapis.com", "googleanalytics.com", "analytics.google.com", "fcm.googleapis.com", "mtalk.google.com", "firebaseinstallations.googleapis.com", "firebaselogging.googleapis.com", "firebaselogging-pa.googleapis.com", "firebaseremoteconfig.googleapis.com", "googleadapis.com", "accounts.google.com", "play.googleapis.com", "android.apis.google.com", "adsense.com", "1e100.net" ],
         "outbound": "warp-proxy"
       },
-      {
-        "inbound": "hy1-inbound",
-        "outbound": "direct"
-      }
+      { "inbound": "hy1-inbound", "outbound": "direct" }
     ],
     "auto_detect_interface": true
   }
 }
 EOF
-chmod 755 /etc/hysteria/config.json
+
+chmod 755 /etc/hysteria/config.json /etc/hysteria/hysteria.crt /etc/hysteria/hysteria.key
 echo "$PASSWORD $(date -d "+365 days" +"%Y-%m-%d")" > /etc/hysteria/users.txt
 
 cat > /etc/systemd/system/hysteria-v1.service <<EOF
@@ -719,32 +801,13 @@ chmod +x /etc/hysteria/auth.sh; touch /etc/hysteria/users_v2.txt
 
 cat << EOF > /etc/hysteria/hy2.json
 {
-  "listen": ":50001-60000",
+  "listen": ":36713",
   "tls": { "cert": "/etc/xray/xray.crt", "key": "/etc/xray/xray.key" },
   "bandwidth": { "up": "1 gbps", "down": "1 gbps" },
   "ignoreClientBandwidth": false,
   "obfs": { "type": "salamander", "salamander": { "password": "GuruzScript" } },
   "auth": { "type": "command", "command": "/etc/hysteria/auth.sh" },
-  "masquerade": { "type": "proxy", "proxy": { "url": "https://bing.com", "rewriteHost": true } },
-  "outbounds": [ { "name": "warp", "type": "socks5", "socks5": { "addr": "127.0.0.1:40000" } }, { "name": "direct", "type": "direct" } ],
-  "acl": {
-    "inline": [
-      "domain(doubleclick.net) -> warp", "domain(googlesyndication.com) -> warp", "domain(googleadservices.com) -> warp",
-      "domain(admob.com) -> warp", "domain(google-analytics.com) -> warp", "domain(app-measurement.com) -> warp",
-      "domain(adservice.google.com) -> warp", "domain(g.doubleclick.net) -> warp", "domain(google.com) -> warp",
-      "domain(pagead2.googlesyndication.com) -> warp", "domain(tpc.googlesyndication.com) -> warp", "domain(googlevideo.com) -> warp",
-      "domain(gvt1.com) -> warp", "domain(gvt2.com) -> warp", "domain(gvt3.com) -> warp", "domain(ytimg.com) -> warp",
-      "domain(youtube.com) -> warp", "domain(gstatic.com) -> warp", "domain(googleusercontent.com) -> warp", "domain(ggpht.com) -> warp",
-      "domain(play.google.com) -> warp", "domain(firebaseio.com) -> warp", "domain(firebase.googleapis.com) -> warp",
-      "domain(crashlytics.com) -> warp", "domain(fundingchoicesmessages.google.com) -> warp", "domain(imasdk.googleapis.com) -> warp",
-      "domain(googleanalytics.com) -> warp", "domain(analytics.google.com) -> warp", "domain(fcm.googleapis.com) -> warp",
-      "domain(mtalk.google.com) -> warp", "domain(firebaseinstallations.googleapis.com) -> warp", "domain(firebaselogging.googleapis.com) -> warp",
-      "domain(firebaselogging-pa.googleapis.com) -> warp", "domain(firebaseremoteconfig.googleapis.com) -> warp",
-      "domain(googleadapis.com) -> warp", "domain(accounts.google.com) -> warp", "domain(play.googleapis.com) -> warp",
-      "domain(android.apis.google.com) -> warp", "domain(adsense.com) -> warp", "domain(1e100.net) -> warp",
-      "all -> direct"
-    ]
-  }
+  "masquerade": { "type": "proxy", "proxy": { "url": "https://bing.com", "rewriteHost": true } }
 }
 EOF
 
@@ -773,7 +836,9 @@ Before=hysteria-v1.service hysteria-server.service
 [Service]
 Type=oneshot
 ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT)'
+ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713)'
 ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport $HYST_PORT -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport $HYST_PORT -j ACCEPT'
+ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport 36713 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 36713 -j ACCEPT'
 ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport 50001:60000 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 50001:60000 -j ACCEPT'
 RemainAfterExit=yes
 [Install]
@@ -792,6 +857,7 @@ mkdir -p /var/run/sslh; touch /var/run/sslh/sslh.pid; chmod 777 /var/run/sslh/ss
 iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53 -j ACCEPT
 IFACE=$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)
 iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
+iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 50001:60000 -j DNAT --to-destination :36713
 deekayz
 
 sed -i "s|MyTimeZone|$MyVPS_Time|g" /etc/deekaystartup
@@ -893,7 +959,7 @@ add_hysteria_v1() {
     echo -e "  ${BOLD}Expiry Date${NC}: ${YELLOW}${exp_date}${NC}"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     echo -e "${BOLD}[ HYSTERIA V1 (Legacy) ]${NC}"
-    echo -e "${YELLOW}hysteria://${DOMAIN:-$(server_ip)}:36712/?insecure=1&peer=${DOMAIN:-$(server_ip)}&auth=${new_pass}&obfsParam=${OBFS_V1}&upmbps=100&downmbps=100&alpn=h3#${new_pass}-HY1${NC}"
+    echo -e "${YELLOW}hysteria://${DOMAIN:-$(server_ip)}:36712/?insecure=1&allowInsecure=1&peer=${DOMAIN:-$(server_ip)}&auth=${new_pass}&obfsParam=${OBFS_V1}&upmbps=100&downmbps=100&alpn=h3#${new_pass}-HY1${NC}"
     pause_return
 }
 
@@ -1014,7 +1080,7 @@ add_hysteria_v2() {
     echo -e "  ${BOLD}Expiry Date${NC}: ${YELLOW}${exp_date}${NC}"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     echo -e "${BOLD}[ HYSTERIA V2 (Native) ]${NC}"
-    echo -e "${YELLOW}hysteria2://${new_pass}@${DOMAIN}:50001/?mport=50001-60000&sni=${DOMAIN}&insecure=1&obfs=salamander&obfs-password=GuruzScript#${new_pass}-HY2${NC}\n"
+    echo -e "${YELLOW}hysteria2://${new_pass}@${DOMAIN}:36713/?insecure=1&sni=${DOMAIN}&obfs=salamander&obfs-password=GuruzScript#${new_pass}-HY2${NC}\n"
     pause_return
 }
 
@@ -1624,7 +1690,7 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086, 25" "BadVPN:" "7300"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "Hysteria V1:" "20000-50000"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "Hysteria V2:" "50001-60000" "" ""
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "Hysteria V2:" "50001-60000"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   printf "  ${WHITE}%-10s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-10s${NC} ${YELLOW}%-10s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM Used:" "$ram" "CPU Used:" "$cpu" "Buffer:" "$buf"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
