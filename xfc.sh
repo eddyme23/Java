@@ -465,23 +465,24 @@ EOF_EXP
 chmod +x /usr/local/bin/exp-check
 echo "0 0 * * * root /usr/local/bin/exp-check >/dev/null 2>&1" > /etc/cron.d/xray-expiry
 
-# USER EXPIRY CRONJOB FOR HYSTERIA V1
+# USER EXPIRY CRONJOB FOR HYSTERIA
 cat <<'EOF_HYST_EXP' > /usr/local/bin/hysteria-exp
 #!/bin/bash
 now=$(date +%Y-%m-%d)
-# Hysteria V1
-if [ -f "/etc/hysteria/users.txt" ]; then
+USER_DB="/etc/hysteria/users.txt"
+CONFIG="/etc/hysteria/config.json"
+if [ -f "$USER_DB" ]; then
   while read -r user exp; do
     if [[ "$now" > "$exp" ]]; then
-      jq ".inbounds[0].users |= map(select(.auth_str != \"$user\"))" /etc/hysteria/config.json > /tmp/h.json && mv /tmp/h.json /etc/hysteria/config.json
-      sed -i "/^$user /d" /etc/hysteria/users.txt
+      jq ".inbounds[0].users |= map(select(.auth_str != \"$user\"))" "$CONFIG" > /tmp/h.json && mv /tmp/h.json "$CONFIG"
+      sed -i "/^$user /d" "$USER_DB"
     fi
-  done < "/etc/hysteria/users.txt"
-  systemctl restart hysteria-v1
+  done < "$USER_DB"
+  systemctl restart hysteria-server
 fi
 EOF_HYST_EXP
 chmod +x /usr/local/bin/hysteria-exp
-echo "0 * * * * root /usr/local/bin/hysteria-exp >/dev/null 2>&1" > /etc/cron.d/hysteria-expiry
+echo "0 0 * * * root /usr/local/bin/hysteria-exp >/dev/null 2>&1" > /etc/cron.d/hysteria-expiry
 
 # Nginx & Squid
 rm -rf /home/vps/public_html /etc/nginx/sites-* /etc/nginx/nginx.conf; mkdir -p /home/vps/public_html
@@ -537,7 +538,7 @@ if check_port SQUIDPORT1 && check_port SQUIDPORT2 && systemctl is-active --quiet
 if check_port NGINXPORT && systemctl is-active --quiet nginx; then clear_fail nginx; else restart_after_3_fails nginx nginx "NGINXPORT"; fi
 for port in 10080 25 2082 2086; do if check_port $port && systemctl is-active --quiet ws-proxy@$port; then clear_fail ws-proxy-$port; else restart_after_3_fails ws-proxy-$port ws-proxy@$port "$port"; fi; done
 if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "443, 80"; fi
-if systemctl is-active --quiet hysteria-v1; then clear_fail hysteria-v1; else restart_after_3_fails hysteria-v1 hysteria-v1 "UDP"; fi
+if systemctl is-active --quiet hysteria-server; then clear_fail hysteria-server; else restart_after_3_fails hysteria-server hysteria-server "UDP"; fi
 ServiceChecker
 
 chmod 755 /etc/deekayvpn/service_checker.sh
@@ -563,11 +564,20 @@ chown root:root /var/log; chmod 755 /var/log; chown syslog:adm /var/log/syslog; 
 echo "*/5 * * * * root /usr/sbin/logrotate -v -f /etc/logrotate.d/rsyslog >/dev/null 2>&1" > /etc/cron.d/logrotate
 echo "0 3 * * * root sync; echo 3 > /proc/sys/vm/drop_caches" > /etc/cron.d/drop-cache
 
+# ==========================================
+# AGGRESSIVE SYSTEM & CONNTRACK TUNING
+# ==========================================
+# Force load nf_conntrack module
 modprobe nf_conntrack 2>/dev/null || true; echo "nf_conntrack" > /etc/modules-load.d/freenet.conf
 cat <<'SYSCTL' > /etc/sysctl.d/99-freenet-tuning.conf
+# File Descriptors
 fs.file-max = 1048576
+
+# Network Core
 net.core.somaxconn = 65535
 net.core.netdev_max_backlog = 16384
+
+# TCP Settings
 net.ipv4.ip_local_port_range = 1024 65000
 net.ipv4.tcp_max_syn_backlog = 8192
 net.ipv4.tcp_fin_timeout = 15
@@ -575,8 +585,12 @@ net.ipv4.tcp_tw_reuse = 1
 net.ipv4.tcp_keepalive_time = 600
 net.ipv4.tcp_keepalive_intvl = 60
 net.ipv4.tcp_keepalive_probes = 10
+
+# SOCKS / WARP Local Loopback Optimization
 net.ipv4.tcp_window_scaling = 1
 net.ipv4.tcp_mtu_probing = 1
+
+# Connection Tracking Limits (Prevents silent drops)
 net.netfilter.nf_conntrack_max = 2097152
 net.netfilter.nf_conntrack_tcp_timeout_established = 1200
 net.netfilter.nf_conntrack_udp_timeout = 60
@@ -755,7 +769,7 @@ EOF
 chmod 755 /etc/hysteria/config.json /etc/hysteria/hysteria.crt /etc/hysteria/hysteria.key
 echo "$PASSWORD $(date -d "+365 days" +"%Y-%m-%d")" > /etc/hysteria/users.txt
 
-cat > /etc/systemd/system/hysteria-v1.service <<EOF
+cat > /etc/systemd/system/hysteria-server.service <<EOF
 [Unit]
 Description=Sing-Box Hysteria v1 Core
 After=network.target
@@ -767,7 +781,7 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl daemon-reload; systemctl enable hysteria-v1.service; systemctl start hysteria-v1.service
+systemctl daemon-reload; systemctl enable hysteria-server.service; systemctl start hysteria-server.service
 
 # NAT & Iptables Configuration
 IFACE="$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)"
@@ -776,7 +790,7 @@ cat > /etc/systemd/system/hysteria-nat.service <<EOF
 Description=Restore Hysteria UDP NAT rules
 After=network-online.target
 Wants=network-online.target
-Before=hysteria-v1.service
+Before=hysteria-server.service
 [Service]
 Type=oneshot
 ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT)'
@@ -841,12 +855,23 @@ systemctl enable badvpn; systemctl start badvpn
 mkdir -p /usr/local/bin
 cat > /usr/local/bin/menu <<'EOF_MENU'
 #!/bin/bash
-RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; BLUE='\033[1;34m'; CYAN='\033[1;36m'; WHITE='\033[1;37m'; NC='\033[0m'; BOLD='\033[1m'
+
+# Modern Color Palette
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[1;34m'
+CYAN='\033[1;36m'
+MAGENTA='\033[1;35m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
 
 DOMAIN=$(cat /etc/deekayvpn/domain.txt 2>/dev/null || curl -4 -s --max-time 2 ipv4.icanhazip.com)
 
-HYST_CONFIG_V1="/etc/hysteria/config.json"
-HYST_USER_DB_V1="/etc/hysteria/users.txt"
+HYST_CONFIG="/etc/hysteria/config.json"
+HYST_USER_DB="/etc/hysteria/users.txt"
+touch "$HYST_USER_DB" 2>/dev/null || true
 
 # --- Utility Functions ---
 server_ip() { curl -4 -s --max-time 2 ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}'; }
@@ -858,22 +883,22 @@ buffer_mem() { free -m 2>/dev/null | awk '/Mem:/ {print $6 "M"}'; }
 
 server_status() {
   local ok=0
-  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-v1 ws-proxy@10080 xray; do
+  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-server ws-proxy@10080 xray; do
     systemctl is-active --quiet "$s" 2>/dev/null && ok=$((ok+1))
   done
   [ "$ok" -ge 4 ] && echo -e "${GREEN}ONLINE${NC}" || echo -e "${RED}ISSUES DETECTED${NC}"
 }
 pause_return() { echo; read -rp "Press ENTER to return... " _; }
 
-# --- HYSTERIA V1 FUNCTIONS (Sing-Box) ---
-add_hysteria_v1() {
+# --- HYSTERIA MANAGEMENT FUNCTIONS ---
+add_hysteria() {
     clear
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "                 ${BOLD}CREATE HYSTERIA USER${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    read -rp " Enter Password: " new_pass
+    read -rp " Enter Password/Auth String: " new_pass
     
-    if grep -qw "^$new_pass" "$HYST_USER_DB_V1" 2>/dev/null || jq -e ".inbounds[0].users[] | select(.auth_str == \"$new_pass\")" "$HYST_CONFIG_V1" >/dev/null; then
+    if grep -qw "^$new_pass" "$HYST_USER_DB" 2>/dev/null || jq -e ".inbounds[0].users[] | select(.auth_str == \"$new_pass\")" "$HYST_CONFIG" >/dev/null; then
         echo -e "\n${RED}Error: User/Password already exists!${NC}"
         pause_return; return
     fi
@@ -881,106 +906,105 @@ add_hysteria_v1() {
     if ! [[ "$days" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid number.${NC}"; pause_return; return; fi
     exp_date=$(date -d "+${days} days" +"%Y-%m-%d")
     
-    jq ".inbounds[0].users += [{\"auth_str\": \"$new_pass\"}]" "$HYST_CONFIG_V1" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG_V1"
-    echo "$new_pass $exp_date" >> "$HYST_USER_DB_V1"
-    systemctl restart hysteria-v1
+    jq ".inbounds[0].users += [{\"auth_str\": \"$new_pass\"}]" "$HYST_CONFIG" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG"
+    echo "$new_pass $exp_date" >> "$HYST_USER_DB"
+    systemctl restart hysteria-server
     
-    OBFS_V1=$(jq -r '.inbounds[0].obfs' "$HYST_CONFIG_V1" 2>/dev/null || echo "GuruzScript")
+    OBFS_VAL=$(jq -r '.inbounds[0].obfs' "$HYST_CONFIG" 2>/dev/null || echo "GuruzScript")
     
-    clear
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "                   ${BOLD}HYSTERIA ACCOUNT CREATED${NC}"
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "  ${BOLD}Domain/Host${NC}: ${YELLOW}${DOMAIN}${NC}"
-    echo -e "  ${BOLD}Ports${NC}      : ${YELLOW}20000-50000 ${NC}"
-    echo -e "  ${BOLD}Password${NC}   : ${YELLOW}${new_pass}${NC}"
-    echo -e "  ${BOLD}Obfs${NC}       : ${YELLOW}${OBFS_V1}${NC}"
-    echo -e "  ${BOLD}Expiry Date${NC}: ${YELLOW}${exp_date}${NC}"
+    echo -e "\n${GREEN}✔ User created successfully!${NC}"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
-    echo -e "${BOLD}[ HYSTERIA V1 ]${NC}"
-    echo -e "${YELLOW}hysteria://${DOMAIN:-$(server_ip)}:36712/?insecure=1&allowInsecure=1&peer=${DOMAIN:-$(server_ip)}&auth=${new_pass}&obfsParam=${OBFS_V1}&upmbps=100&downmbps=100&alpn=h3#${new_pass}-HY1${NC}"
+    echo -e " ${BOLD}IP:${NC}          ${YELLOW}$(server_ip)${NC}"
+    echo -e " ${BOLD}Domain:${NC}      ${YELLOW}${DOMAIN:-$(server_ip)}${NC}"
+    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}20000-50000 (-> 36712)${NC}"
+    echo -e " ${BOLD}User (Pass):${NC} ${YELLOW}${new_pass}${NC}"
+    echo -e " ${BOLD}Obfs:${NC}        ${YELLOW}${OBFS_VAL}${NC}"
+    echo -e " ${BOLD}Expiry Date:${NC} ${YELLOW}${exp_date}${NC}"
+    echo -e "${CYAN}--------------------------------------------------------------${NC}"
+    echo -e "${BOLD}[ HYSTERIA LINK ]${NC}"
+    echo -e "${YELLOW}hysteria://${DOMAIN:-$(server_ip)}:36712/?insecure=1&allowInsecure=1&peer=${DOMAIN:-$(server_ip)}&auth=${new_pass}&obfsParam=${OBFS_VAL}&upmbps=100&downmbps=100&alpn=h3#${new_pass}-HY1${NC}"
     pause_return
 }
 
-del_hysteria_v1() {
+del_hysteria() {
     clear
     echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
     echo -e "                 ${BOLD}DELETE HYSTERIA USER${NC}"
     echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
-    if [ ! -s "$HYST_USER_DB_V1" ]; then echo -e "No users found."; pause_return; return; fi
-    cat -n "$HYST_USER_DB_V1" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
+    if [ ! -s "$HYST_USER_DB" ]; then echo -e "No users found."; pause_return; return; fi
+    cat -n "$HYST_USER_DB" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
     echo ""
     read -rp " Enter the ID number of the user to delete: " del_id
     if ! [[ "$del_id" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid ID.${NC}"; pause_return; return; fi
 
-    del_pass=$(sed -n "${del_id}p" "$HYST_USER_DB_V1" | awk '{print $1}')
+    del_pass=$(sed -n "${del_id}p" "$HYST_USER_DB" | awk '{print $1}')
     if [ -z "$del_pass" ]; then echo -e "${RED}ID not found.${NC}"; pause_return; return; fi
 
-    jq ".inbounds[0].users |= map(select(.auth_str != \"$del_pass\"))" "$HYST_CONFIG_V1" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG_V1"
-    sed -i "${del_id}d" "$HYST_USER_DB_V1"
-    systemctl restart hysteria-v1
+    jq ".inbounds[0].users |= map(select(.auth_str != \"$del_pass\"))" "$HYST_CONFIG" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG"
+    sed -i "${del_id}d" "$HYST_USER_DB"
+    systemctl restart hysteria-server
     echo -e "\n${GREEN}✔ User '$del_pass' deleted successfully!${NC}"
     pause_return
 }
 
-extend_hysteria_v1() {
+extend_hysteria() {
     clear
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "                 ${BOLD}EXTEND HYSTERIA USER${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    if [ ! -s "$HYST_USER_DB_V1" ]; then echo -e "No users found."; pause_return; return; fi
+    if [ ! -s "$HYST_USER_DB" ]; then echo -e "No users found."; pause_return; return; fi
 
-    cat -n "$HYST_USER_DB_V1" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
+    cat -n "$HYST_USER_DB" | awk '{print " ["$1"] User: "$2" | Exp: "$3}'
     echo ""
     read -rp " Enter the ID number of the user to extend: " ext_id
     if ! [[ "$ext_id" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid ID.${NC}"; pause_return; return; fi
     
-    ext_pass=$(sed -n "${ext_id}p" "$HYST_USER_DB_V1" | awk '{print $1}')
-    current_exp=$(sed -n "${ext_id}p" "$HYST_USER_DB_V1" | awk '{print $2}')
+    ext_pass=$(sed -n "${ext_id}p" "$HYST_USER_DB" | awk '{print $1}')
+    current_exp=$(sed -n "${ext_id}p" "$HYST_USER_DB" | awk '{print $2}')
     if [ -z "$ext_pass" ]; then echo -e "${RED}ID not found.${NC}"; pause_return; return; fi
     
     read -rp " Add Validity (Days): " days
     if ! [[ "$days" =~ ^[0-9]+$ ]]; then echo -e "${RED}Invalid number.${NC}"; pause_return; return; fi
     
     new_exp=$(date -d "$current_exp + $days days" +"%Y-%m-%d")
-    sed -i "${ext_id}s/.*/$ext_pass $new_exp/" "$HYST_USER_DB_V1"
+    sed -i "${ext_id}s/.*/$ext_pass $new_exp/" "$HYST_USER_DB"
     
     echo -e "\n${GREEN}✔ User '$ext_pass' extended successfully!${NC}\n New Expiry: ${YELLOW}$new_exp${NC}"
     pause_return
 }
 
-list_hysteria_v1() {
+list_hysteria() {
     clear
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "                   ${BOLD}HYSTERIA USERS LIST${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    if [ ! -s "$HYST_USER_DB_V1" ]; then echo -e "\n No active users found.\n"
+    if [ ! -s "$HYST_USER_DB" ]; then echo -e "\n No active users found.\n"
     else
         printf " %-5s | %-25s | %-15s\n" "ID" "PASSWORD (AUTH STRING)" "EXPIRY DATE"
         echo -e "${CYAN}--------------------------------------------------------------${NC}"
-        cat -n "$HYST_USER_DB_V1" | while read -r num user exp; do
+        cat -n "$HYST_USER_DB" | while read -r num user exp; do
             printf " [%-3s] | %-25s | %-15s\n" "$num" "$user" "$exp"
         done
         echo -e "${CYAN}--------------------------------------------------------------${NC}"
-        echo -e " Total Active Users: ${YELLOW}$(wc -l < "$HYST_USER_DB_V1")${NC}"
+        echo -e " Total Active Users: ${YELLOW}$(wc -l < "$HYST_USER_DB")${NC}"
     fi
     pause_return
 }
 
-speed_hysteria_v1() {
+speed_hysteria() {
     clear
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "                 ${BOLD}EDIT UP/DOWN SPEEDS${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    current_up=$(jq -r '.inbounds[0].up_mbps' "$HYST_CONFIG_V1" 2>/dev/null || echo "100")
-    current_down=$(jq -r '.inbounds[0].down_mbps' "$HYST_CONFIG_V1" 2>/dev/null || echo "100")
+    current_up=$(jq -r '.inbounds[0].up_mbps' "$HYST_CONFIG" 2>/dev/null || echo "100")
+    current_down=$(jq -r '.inbounds[0].down_mbps' "$HYST_CONFIG" 2>/dev/null || echo "100")
     echo -e " Current Upload:   ${YELLOW}${current_up} Mbps${NC}"
     echo -e " Current Download: ${YELLOW}${current_down} Mbps${NC}\n"
     read -rp " Enter New Upload Speed (Mbps): " new_up
     read -rp " Enter New Download Speed (Mbps): " new_down
     if [[ "$new_up" =~ ^[0-9]+$ ]] && [[ "$new_down" =~ ^[0-9]+$ ]]; then
-        jq ".inbounds[0].up_mbps = $new_up | .inbounds[0].down_mbps = $new_down" "$HYST_CONFIG_V1" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG_V1"
-        systemctl restart hysteria-v1
+        jq ".inbounds[0].up_mbps = $new_up | .inbounds[0].down_mbps = $new_down" "$HYST_CONFIG" > /tmp/h.json && mv /tmp/h.json "$HYST_CONFIG"
+        systemctl restart hysteria-server
         echo -e "\n${GREEN}✔ Speeds updated successfully!${NC}"
     else echo -e "\n${RED}Invalid input. Numbers only.${NC}"; fi
     pause_return
@@ -1222,6 +1246,7 @@ create_user() {
   echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086, 25"
   echo -e "  SlowDNS    : 53"
   echo -e "  BadVPN     : 7300"
+  echo -e "  Hysteria   : 20000-50000"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
   echo -e "  ${BOLD}Payload HTTP     :${NC}"
   echo -e "  ${YELLOW}GET / HTTP/1.1[crlf]Host: ${DOMAIN}[crlf]Connection: upgrade[crlf]Upgrade: websocket[crlf][crlf]${NC}"
@@ -1343,12 +1368,12 @@ service_control_menu() {
     echo -e "  [${YELLOW}00${NC}] Back\n"
     read -rp "  Select an option: " opt
     case "$opt" in
-      1|01) restart_service "ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-v1 badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray" "All Services"; pause_return ;;
+      1|01) restart_service "ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray" "All Services"; pause_return ;;
       2|02) restart_service "ssh dropbear" "SSH & Dropbear"; pause_return ;;
       3|03) restart_service "ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086" "Node WebSocket Proxies"; pause_return ;;
       4|04) restart_service "stunnel4 xray" "Stunnel & Xray Core"; pause_return ;;
       5|05) restart_service "squid nginx" "Squid Proxy & Nginx"; pause_return ;;
-      6|06) restart_service "server-sldns hysteria-v1 badvpn" "UDP Core Services"; pause_return ;;
+      6|06) restart_service "server-sldns hysteria-server badvpn" "UDP Core Services"; pause_return ;;
       0|00) break ;;
       *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
     esac
@@ -1381,7 +1406,7 @@ restore_snapshot() {
   if [ -n "${backups[$idx]}" ]; then
     echo -e "\nRestoring ${YELLOW}$(basename "${backups[$idx]}")${NC}..."
     tar -xzf "${backups[$idx]}" -C /
-    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-v1 badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray 2>/dev/null || true
+    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray 2>/dev/null || true
     echo -e "${GREEN}✔ Restore complete!${NC}"
   else echo -e "${RED}Invalid selection.${NC}"; fi
   pause_return
@@ -1474,12 +1499,12 @@ advanced_menu() {
     case "$opt" in
       1|01) clear; cat /etc/hysteria/config.json 2>/dev/null || echo "Not found."; pause_return ;;
       2|02) 
-        clear; echo -e "[1] SSH  [2] WS-Proxies  [3] Hysteria V1  [4] SlowDNS  [5] Xray\n"
+        clear; echo -e "[1] SSH  [2] WS-Proxies  [3] Hysteria  [4] SlowDNS  [5] Xray\n"
         read -rp "Select log: " lopt
         case "$lopt" in
           1) journalctl -u ssh -n 50 --no-pager ;;
           2) journalctl -u ws-proxy@10080 -n 50 --no-pager ;;
-          3) journalctl -u hysteria-v1 -n 50 --no-pager ;;
+          3) journalctl -u hysteria-server -n 50 --no-pager ;;
           4) journalctl -u server-sldns -n 50 --no-pager ;;
           5) journalctl -u xray -n 50 --no-pager ;;
         esac; pause_return ;;
@@ -1499,8 +1524,8 @@ remove_script() {
   read -rp "  Are you absolutely sure? [y/N]: " ans
   if [[ "$ans" =~ ^[Yy]$ ]]; then
       echo -e "\nStopping services..."
-      systemctl stop ws-proxy@* server-sldns badvpn hysteria-v1 sslh stunnel4 squid dropbear nginx xray 2>/dev/null || true
-      systemctl disable ws-proxy@* server-sldns badvpn hysteria-v1 xray 2>/dev/null || true
+      systemctl stop ws-proxy@* server-sldns badvpn hysteria-server sslh stunnel4 squid dropbear nginx xray 2>/dev/null || true
+      systemctl disable ws-proxy@* server-sldns badvpn hysteria-server xray 2>/dev/null || true
       echo "Deleting files..."
       rm -f /etc/systemd/system/ws-proxy@.service /etc/systemd/system/server-sldns.service /etc/systemd/system/badvpn.service /etc/systemd/system/xray.service
       rm -f /etc/cron.d/service-checker /etc/cron.d/logrotate /etc/cron.d/xray-expiry /etc/cron.d/hysteria-expiry /etc/sysctl.d/99-freenet-tuning.conf /etc/security/limits.d/99-freenet.conf
@@ -1537,7 +1562,7 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "80, 8080, 8880" "Squid:" "3128, 8000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086, 25" "BadVPN:" "7300"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "Hysteria:" "20000-50000"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   printf "  ${WHITE}%-10s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-10s${NC} ${YELLOW}%-10s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM Used:" "$ram" "CPU Used:" "$cpu" "Buffer:" "$buf"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
@@ -1547,7 +1572,7 @@ while true; do
   clear; draw_header; echo
   echo -e "  [${YELLOW}01${NC}] SSH Account Management (Legacy)"
   echo -e "  [${YELLOW}02${NC}] Xray Account Management (V2ray)"
-  echo -e "  [${YELLOW}03${NC}] Hysteria Management"
+  echo -e "  [${YELLOW}03${NC}] Hysteria Account Management (UDP)"
   echo -e "  [${YELLOW}04${NC}] Monitor Active Connections"
   echo -e "  [${YELLOW}05${NC}] Service Controls (Restart Protocols)"
   echo -e "  [${YELLOW}06${NC}] Backup & Restore Data"
@@ -1571,9 +1596,9 @@ while true; do
       done ;;
     3|03)
       while true; do
-        clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                 ${BOLD}HYSTERIA MANAGEMENT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
-        echo -e "  [${YELLOW}1${NC}] Add User\n  [${YELLOW}2${NC}] Renew User\n  [${YELLOW}3${NC}] Delete User\n  [${YELLOW}4${NC}] List Accounts\n  [${YELLOW}5${NC}] Edit Up/Down Speeds\n  [${YELLOW}0${NC}] Back\n"
-        read -rp "  ► Option: " sub; case "$sub" in 1) add_hysteria_v1;; 2) extend_hysteria_v1;; 3) del_hysteria_v1;; 4) list_hysteria_v1;; 5) speed_hysteria_v1;; 0) break;; esac
+        clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}HYSTERIA ACCOUNT MANAGEMENT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "  [${YELLOW}1${NC}] Add Hysteria Account\n  [${YELLOW}2${NC}] Renew Hysteria Account\n  [${YELLOW}3${NC}] Delete Hysteria Account\n  [${YELLOW}4${NC}] List All Accounts\n  [${YELLOW}5${NC}] Edit Up/Down Speeds\n  [${YELLOW}0${NC}] Back\n"
+        read -rp "  ► Option: " sub; case "$sub" in 1) add_hysteria;; 2) extend_hysteria;; 3) del_hysteria;; 4) list_hysteria;; 5) speed_hysteria;; 0) break;; esac
       done ;;
     4|04) online_users ;;
     5|05) service_control_menu ;;
