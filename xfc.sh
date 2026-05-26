@@ -15,7 +15,6 @@ case "$ID:$VERSION_ID" in
   ubuntu:24.04) SUPPORT_LEVEL="supported" ;;
   debian:11) SUPPORT_LEVEL="legacy" ;;
   debian:12) SUPPORT_LEVEL="supported" ;;
-  debian:13) SUPPORT_LEVEL="supported" ;;
   *) SUPPORT_LEVEL="unsupported" ;;
 esac
 
@@ -25,8 +24,7 @@ echo "============================================================"
 echo ""
 echo "Supported Operating Systems:"
 echo ""
-echo "  ✔ Debian 13              (Supported)"
-echo "  ✔ Debian 12              (supported)"
+echo "  ✔ Debian 12              (Supported)"
 echo "  ✔ Debian 11              (Legacy Support)"
 echo "  ✔ Ubuntu 24.04           (Supported)"
 echo "  ✔ Ubuntu 22.04           (Recommended)"
@@ -36,7 +34,7 @@ echo "============================================================"
 sleep 2
 
 if [ "$SUPPORT_LEVEL" = "unsupported" ]; then
-  echo "This installer supports Ubuntu 20.04/22.04/24.04 and Debian 11/12/13 only."
+  echo "This installer supports Ubuntu 20.04/22.04/24.04 and Debian 11/12 only."
   echo "Detected: ${ID} ${VERSION_ID}"
   exit 1
 fi
@@ -1224,7 +1222,6 @@ create_user() {
   echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086, 25"
   echo -e "  SlowDNS    : 53"
   echo -e "  BadVPN     : 7300"
-  echo -e "  Hysteria   : 20000-50000"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
   echo -e "  ${BOLD}Payload HTTP     :${NC}"
   echo -e "  ${YELLOW}GET / HTTP/1.1[crlf]Host: ${DOMAIN}[crlf]Connection: upgrade[crlf]Upgrade: websocket[crlf][crlf]${NC}"
