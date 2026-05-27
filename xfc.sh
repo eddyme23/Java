@@ -24,7 +24,7 @@ echo "============================================================"
 echo ""
 echo "Supported Operating Systems:"
 echo ""
-echo "  ✔ Debian 12              (Supported)"
+echo "  ✔ Debian 12              (Recommended)"
 echo "  ✔ Debian 11              (Legacy Support)"
 echo "  ✔ Ubuntu 24.04           (Supported)"
 echo "  ✔ Ubuntu 22.04           (Recommended)"
@@ -627,7 +627,7 @@ WantedBy=multi-user.target
 END
 systemctl daemon-reload; systemctl enable server-sldns; systemctl restart server-sldns
 
-# === HYSTERIA v1 (Sing-box v1.8.14) & CLOUDFLARE WARP ===
+# === HYSTERIA v1 (Sing-box v1.12.22) & CLOUDFLARE WARP ===
 curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
 apt-get update && apt-get install -y cloudflare-warp
@@ -640,7 +640,7 @@ warp-cli --accept-tos proxy port 40000
 warp-cli --accept-tos connect
 sleep 2
 
-wget -qO /tmp/sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v1.8.14/sing-box_1.8.14_linux_amd64.deb"
+wget -qO /tmp/sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v1.12.22/sing-box_1.12.22_linux_amd64.deb"
 dpkg -i /tmp/sing-box.deb
 apt-mark hold sing-box
 rm -f /tmp/sing-box.deb
@@ -851,6 +851,12 @@ WantedBy=multi-user.target
 deekayb
 systemctl enable badvpn; systemctl start badvpn
 
+# VNSTAT INITIALIZATION
+IFACE="$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)"
+vnstat -u -i "$IFACE" 2>/dev/null || true
+systemctl enable vnstat
+systemctl restart vnstat
+
 # MENU CREATION - FULL AND UNCOMPRESSED
 mkdir -p /usr/local/bin
 cat > /usr/local/bin/menu <<'EOF_MENU'
@@ -921,8 +927,6 @@ add_hysteria() {
     echo -e " ${BOLD}Obfs:${NC}        ${YELLOW}${OBFS_VAL}${NC}"
     echo -e " ${BOLD}Expiry Date:${NC} ${YELLOW}${exp_date}${NC}"
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
-    echo -e "${BOLD}[ HYSTERIA LINK ]${NC}"
-    echo -e "${YELLOW}hysteria://${DOMAIN:-$(server_ip)}:36712/?insecure=1&allowInsecure=1&peer=${DOMAIN:-$(server_ip)}&auth=${new_pass}&obfsParam=${OBFS_VAL}&upmbps=100&downmbps=100&alpn=h3#${new_pass}-HY1${NC}"
     pause_return
 }
 
@@ -1497,15 +1501,16 @@ advanced_menu() {
     read -rp "  Select an option: " opt
     case "$opt" in
       1|01) clear; cat /etc/hysteria/config.json 2>/dev/null || echo "Not found."; pause_return ;;
-      2|02) 
-        clear; echo -e "[1] SSH  [2] WS-Proxies  [3] Hysteria  [4] SlowDNS  [5] Xray\n"
+    2|02) 
+        clear; echo -e "[1] SSH  [2] WS-Proxies  [3] Hysteria  [4] Stunnel  [5] SlowDNS  [6] Xray\n"
         read -rp "Select log: " lopt
         case "$lopt" in
           1) journalctl -u ssh -n 50 --no-pager ;;
           2) journalctl -u ws-proxy@10080 -n 50 --no-pager ;;
           3) journalctl -u hysteria-server -n 50 --no-pager ;;
-          4) journalctl -u server-sldns -n 50 --no-pager ;;
-          5) journalctl -u xray -n 50 --no-pager ;;
+          4) journalctl -u stunnel4 -n 50 --no-pager ;;
+          5) journalctl -u server-sldns -n 50 --no-pager ;;
+          6) journalctl -u xray -n 50 --no-pager ;;
         esac; pause_return ;;
       3|03) change_domain ;;
       4|04) change_slowdns ;;
