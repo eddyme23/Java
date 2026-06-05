@@ -1323,29 +1323,41 @@ online_users() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
 
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
-  LOG="/var/log/auth.log"
-  [ -e "/var/log/secure" ] && LOG="/var/log/secure"
+  
+  # Create a unified temporary log source supporting both rsyslog and journald
+  TMP_LOG="/tmp/active_auth.log"
+  rm -f "$TMP_LOG"
+  
+  if [ -f "/var/log/auth.log" ]; then
+      cat "/var/log/auth.log" > "$TMP_LOG"
+  elif [ -f "/var/log/secure" ]; then
+      cat "/var/log/secure" > "$TMP_LOG"
+  else
+      # Fallback to systemd journal for modern Ubuntu 22/24 & Debian 12
+      journalctl -u ssh --no-pager 2>/dev/null > "$TMP_LOG"
+      journalctl -u dropbear --no-pager 2>/dev/null >> "$TMP_LOG"
+  fi
   
   declare -A session_counts
   
-  if [ -f "$LOG" ]; then
+  if [ -s "$TMP_LOG" ]; then # Checks if log source exists and has data
       # Track Dropbear Logins
       db_pids=( $(ps aux | grep -i dropbear | grep -v grep | awk '{print $2}') )
-      grep -i dropbear "$LOG" | grep -i "Password auth succeeded" > /tmp/login-db.txt
+      grep -i "dropbear" "$TMP_LOG" | grep -i "Password auth succeeded" > /tmp/login-db.txt
       for PID in "${db_pids[@]}"; do
           USER=$(grep "dropbear\[$PID\]" /tmp/login-db.txt | awk '{print $10}' | head -n 1)
           [ -n "$USER" ] && session_counts["$USER"]=$((session_counts["$USER"]+1))
       done
       
       # Track OpenSSH Logins
-      grep -i sshd "$LOG" | grep -i "Accepted password for" > /tmp/login-sshd.txt
+      grep -i "sshd" "$TMP_LOG" | grep -i "Accepted password for" > /tmp/login-sshd.txt
       ssh_pids=( $(ps aux | grep "\[priv\]" | awk '{print $2}') )
       for PID in "${ssh_pids[@]}"; do
           USER=$(grep "sshd\[$PID\]" /tmp/login-sshd.txt | awk '{print $9}' | head -n 1)
           [ -n "$USER" ] && session_counts["$USER"]=$((session_counts["$USER"]+1))
       done
       
-      rm -f /tmp/login-db.txt /tmp/login-sshd.txt
+      rm -f /tmp/login-db.txt /tmp/login-sshd.txt "$TMP_LOG"
       
       if [ ${#session_counts[@]} -eq 0 ]; then
           echo -e "  No authenticated legacy SSH users are currently online.\n"
@@ -1362,7 +1374,7 @@ online_users() {
           echo
       fi
   else
-      echo -e "  ${RED}Authentication logs missing. Cannot monitor SSH/Dropbear.${NC}\n"
+      echo -e "  ${RED}No recent authentication logs found (System idle or logging service down).${NC}\n"
   fi
 
   echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent Unique IPs) ---${NC}"
