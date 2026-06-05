@@ -1324,7 +1324,6 @@ online_users() {
 
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
   
-  # Create a unified temporary log source supporting both rsyslog and journald
   TMP_LOG="/tmp/active_auth.log"
   rm -f "$TMP_LOG"
   
@@ -1333,27 +1332,26 @@ online_users() {
   elif [ -f "/var/log/secure" ]; then
       cat "/var/log/secure" > "$TMP_LOG"
   else
-      # Fallback to systemd journal for modern Ubuntu 22/24 & Debian 12
       journalctl -u ssh --no-pager 2>/dev/null > "$TMP_LOG"
       journalctl -u dropbear --no-pager 2>/dev/null >> "$TMP_LOG"
   fi
   
   declare -A session_counts
   
-  if [ -s "$TMP_LOG" ]; then # Checks if log source exists and has data
-      # Track Dropbear Logins
+  if [ -s "$TMP_LOG" ]; then
+      # Track Dropbear Logins (Strip single quotes)
       db_pids=( $(ps aux | grep -i dropbear | grep -v grep | awk '{print $2}') )
       grep -i "dropbear" "$TMP_LOG" | grep -i "Password auth succeeded" > /tmp/login-db.txt
       for PID in "${db_pids[@]}"; do
-          USER=$(grep "dropbear\[$PID\]" /tmp/login-db.txt | awk '{print $10}' | head -n 1)
+          USER=$(grep "dropbear\[$PID\]" /tmp/login-db.txt | awk '{print $10}' | tr -d "'" | head -n 1)
           [ -n "$USER" ] && session_counts["$USER"]=$((session_counts["$USER"]+1))
       done
       
-      # Track OpenSSH Logins
+      # Track OpenSSH Logins (Strip single quotes just in case)
       grep -i "sshd" "$TMP_LOG" | grep -i "Accepted password for" > /tmp/login-sshd.txt
       ssh_pids=( $(ps aux | grep "\[priv\]" | awk '{print $2}') )
       for PID in "${ssh_pids[@]}"; do
-          USER=$(grep "sshd\[$PID\]" /tmp/login-sshd.txt | awk '{print $9}' | head -n 1)
+          USER=$(grep "sshd\[$PID\]" /tmp/login-sshd.txt | awk '{print $9}' | tr -d "'" | head -n 1)
           [ -n "$USER" ] && session_counts["$USER"]=$((session_counts["$USER"]+1))
       done
       
@@ -1374,15 +1372,20 @@ online_users() {
           echo
       fi
   else
-      echo -e "  ${RED}No recent authentication logs found (System idle or logging service down).${NC}\n"
+      echo -e "  ${RED}No recent authentication logs found.${NC}\n"
   fi
 
   echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent Unique IPs) ---${NC}"
+  
+  # Ensure the Xray log directory and files exist to prevent read errors
+  mkdir -p /var/log/xray
+  touch /var/log/xray/access.log /var/log/xray/error.log
+
   if grep -q '"loglevel": "warning"' /etc/xray/config.json 2>/dev/null; then
       sed -i 's/"loglevel": "warning"/"loglevel": "info"/g' /etc/xray/config.json
       systemctl restart xray 2>/dev/null
       echo -e "  [System Note] Xray logging enabled. Reconnect users to see logs.\n"
-  elif [ -f /var/log/xray/access.log ]; then
+  else
       active_xray=$(tail -n 10000 /var/log/xray/access.log 2>/dev/null | grep "accepted" | awk '{ user=""; for(i=1;i<=NF;i++) if($i=="email:") user=$(i+1); if(user!="") { split($3, a, ":"); print user " " a[1] } }' | sort -u | awk '{print $1}' | uniq -c | sort -nr)
       if [ -z "$active_xray" ]; then 
           echo -e "  No active Xray users found in recent logs.\n"
@@ -1399,8 +1402,6 @@ online_users() {
               fi
           done <<< "$active_xray"
       fi
-  else 
-      echo -e "  Xray access log not found.\n"
   fi
   
   pause_return
