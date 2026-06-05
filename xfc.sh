@@ -448,20 +448,30 @@ systemctl daemon-reload; systemctl enable xray; systemctl restart xray
 cat <<'EOF_EXP' > /usr/local/bin/exp-check
 #!/bin/bash
 now=$(date +%Y-%m-%d)
+changed=0
+
 for proto in vless vmess trojan; do
-  if [ -f "/etc/xray/${proto}.txt" ]; then
-    data=( $(cat /etc/xray/${proto}.txt | awk '{print $1}') )
-    for user in "${data[@]}"; do
-      exp=$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $3}')
-      if [[ "$now" > "$exp" ]]; then
-        jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
-        sed -i "/^$user /d" /etc/xray/${proto}.txt
-      fi
+  db_file="/etc/xray/${proto}.txt"
+  if [ -f "$db_file" ]; then
+    # Read expired users into an array securely to avoid read/write collisions
+    mapfile -t expired_users < <(awk -v d="$now" '$3 < d {print $1}' "$db_file")
+    
+    for user in "${expired_users[@]}"; do
+      # Remove from JSON config
+      jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+      # Remove from TXT DB
+      sed -i "/^$user /d" "$db_file"
+      changed=1
     done
   fi
 done
-systemctl restart xray
+
+# Only drop active connections and restart the core if a user was actually removed
+if [ "$changed" -eq 1 ]; then
+  systemctl restart xray
+fi
 EOF_EXP
+
 chmod +x /usr/local/bin/exp-check
 echo "0 0 * * * root /usr/local/bin/exp-check >/dev/null 2>&1" > /etc/cron.d/xray-expiry
 
@@ -471,16 +481,27 @@ cat <<'EOF_HYST_EXP' > /usr/local/bin/hysteria-exp
 now=$(date +%Y-%m-%d)
 USER_DB="/etc/hysteria/users.txt"
 CONFIG="/etc/hysteria/config.json"
+changed=0
+
 if [ -f "$USER_DB" ]; then
-  while read -r user exp; do
-    if [[ "$now" > "$exp" ]]; then
-      jq ".inbounds[0].users |= map(select(.auth_str != \"$user\"))" "$CONFIG" > /tmp/h.json && mv /tmp/h.json "$CONFIG"
-      sed -i "/^$user /d" "$USER_DB"
-    fi
-  done < "$USER_DB"
-  systemctl restart hysteria-server
+  # Read expired users into an array securely to avoid modifying the file while reading it
+  mapfile -t expired_users < <(awk -v d="$now" '$2 < d {print $1}' "$USER_DB")
+  
+  for user in "${expired_users[@]}"; do
+    # Remove from JSON config
+    jq ".inbounds[0].users |= map(select(.auth_str != \"$user\"))" "$CONFIG" > /tmp/h.json && mv /tmp/h.json "$CONFIG"
+    # Remove from TXT DB
+    sed -i "/^$user /d" "$USER_DB"
+    changed=1
+  done
+  
+  # Only restart the UDP core if an account was actually scrubbed
+  if [ "$changed" -eq 1 ]; then
+    systemctl restart hysteria-server
+  fi
 fi
 EOF_HYST_EXP
+
 chmod +x /usr/local/bin/hysteria-exp
 echo "0 0 * * * root /usr/local/bin/hysteria-exp >/dev/null 2>&1" > /etc/cron.d/hysteria-expiry
 
@@ -1268,8 +1289,15 @@ delete_user() {
   clear; echo -e "${RED}Warning: You are about to delete user: ${YELLOW}$SELECTED_USER${NC}"
   read -rp "Are you sure? [y/N]: " ans
   if [[ "$ans" =~ ^[Yy]$ ]]; then
-    userdel -r "$SELECTED_USER" 2>/dev/null || userdel "$SELECTED_USER" 2>/dev/null
-    echo -e "${GREEN}User $SELECTED_USER has been deleted.${NC}"
+    # Force kill all processes owned by the user to free up the account
+    pkill -u "$SELECTED_USER" 2>/dev/null
+    
+    # Execute forced deletion
+    if userdel -r -f "$SELECTED_USER" 2>/dev/null || userdel -f "$SELECTED_USER" 2>/dev/null; then
+        echo -e "${GREEN}User $SELECTED_USER has been deleted.${NC}"
+    else
+        echo -e "${RED}Failed to delete $SELECTED_USER. Check for locked files.${NC}"
+    fi
   fi
   pause_return
 }
@@ -1295,29 +1323,46 @@ online_users() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
 
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
-  declare -A active_ssh
-  mapfile -t USERS < <(awk -F: '$3 >= 1000 && $1 != "nobody" && $1 != "systemd-network" && $1 != "messagebus" {print $1}' /etc/passwd 2>/dev/null)
+  LOG="/var/log/auth.log"
+  [ -e "/var/log/secure" ] && LOG="/var/log/secure"
   
-  for user in "${USERS[@]}"; do
-      ssh_count=$(ps -u "$user" 2>/dev/null | grep -c "sshd")
-      drop_count=$(ps -ef 2>/dev/null | grep -i "dropbear" | grep -w "$user" | grep -v grep | wc -l)
-      total=$((ssh_count + drop_count))
-      if [ "$total" -gt 0 ]; then active_ssh["$user"]=$total; fi
-  done
-
-  if [ "${#active_ssh[@]}" -eq 0 ]; then 
-      echo -e "  No authenticated legacy SSH users are currently online.\n"
+  declare -A session_counts
+  
+  if [ -f "$LOG" ]; then
+      # Track Dropbear Logins
+      db_pids=( $(ps aux | grep -i dropbear | grep -v grep | awk '{print $2}') )
+      grep -i dropbear "$LOG" | grep -i "Password auth succeeded" > /tmp/login-db.txt
+      for PID in "${db_pids[@]}"; do
+          USER=$(grep "dropbear\[$PID\]" /tmp/login-db.txt | awk '{print $10}' | head -n 1)
+          [ -n "$USER" ] && session_counts["$USER"]=$((session_counts["$USER"]+1))
+      done
+      
+      # Track OpenSSH Logins
+      grep -i sshd "$LOG" | grep -i "Accepted password for" > /tmp/login-sshd.txt
+      ssh_pids=( $(ps aux | grep "\[priv\]" | awk '{print $2}') )
+      for PID in "${ssh_pids[@]}"; do
+          USER=$(grep "sshd\[$PID\]" /tmp/login-sshd.txt | awk '{print $9}' | head -n 1)
+          [ -n "$USER" ] && session_counts["$USER"]=$((session_counts["$USER"]+1))
+      done
+      
+      rm -f /tmp/login-db.txt /tmp/login-sshd.txt
+      
+      if [ ${#session_counts[@]} -eq 0 ]; then
+          echo -e "  No authenticated legacy SSH users are currently online.\n"
+      else
+          printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
+          echo -e "${CYAN}  ----------------------------------------------------------${NC}"
+          for user in "${!session_counts[@]}"; do
+              if [ "${session_counts[$user]}" -gt 1 ]; then
+                  printf "  %-25s ${RED}%-15s (Multi-Login)${NC}\n" "$user" "${session_counts[$user]}"
+              else
+                  printf "  %-25s ${GREEN}%-15s${NC}\n" "$user" "${session_counts[$user]}"
+              fi
+          done | sort
+          echo
+      fi
   else
-    printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
-    echo -e "${CYAN}  ----------------------------------------------------------${NC}"
-    for user in "${!active_ssh[@]}"; do 
-        if [ "${active_ssh[$user]}" -gt 1 ]; then
-            printf "  %-25s ${RED}%-15s (Multi-Login)${NC}\n" "$user" "${active_ssh[$user]}"
-        else
-            printf "  %-25s ${GREEN}%-15s${NC}\n" "$user" "${active_ssh[$user]}"
-        fi
-    done | sort
-    echo
+      echo -e "  ${RED}Authentication logs missing. Cannot monitor SSH/Dropbear.${NC}\n"
   fi
 
   echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent Unique IPs) ---${NC}"
@@ -1342,7 +1387,9 @@ online_users() {
               fi
           done <<< "$active_xray"
       fi
-  else echo -e "  Xray access log not found.\n"; fi
+  else 
+      echo -e "  Xray access log not found.\n"
+  fi
   
   pause_return
 }
