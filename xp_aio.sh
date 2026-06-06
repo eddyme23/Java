@@ -20,7 +20,7 @@ echo ""
 
 # Check for and install required packages
 install_required_packages() {
-    REQUIRED_PACKAGES=("curl" "openssl")
+    REQUIRED_PACKAGES=("curl" "openssl" "socat" "cron")
     for pkg in "${REQUIRED_PACKAGES[@]}"; do
         if ! command -v $pkg &> /dev/null; then
             apt-get update > /dev/null 2>&1
@@ -37,9 +37,7 @@ if [ -d "/root/hysteria" ]; then
     echo ""
     echo "1) Reinstall"
     echo ""
-    echo "2) Modify"
-    echo ""
-    echo "3) Uninstall"
+    echo "2) Uninstall"
     echo ""
     read -p "Enter your choice: " choice
     case $choice in
@@ -52,90 +50,13 @@ if [ -d "/root/hysteria" ]; then
             rm /etc/systemd/system/hysteria.service
             ;;
         2)
-            # Modify
-            cd /root/hysteria
-        
-            # Get the current port and password from config.yaml
-            current_port=$(grep -oP 'listen: :\K\d+' config.yaml)
-            current_password=$(awk '/auth:/{flag=1; next} /type:/{if(flag) next} /password:/{if(flag) {print $2; exit}}' config.yaml | tr -d '[:space:]')
-            current_obfs=$(awk '/salamander:/{flag=1; next} /password:/{if(flag) {print $2; exit}}' config.yaml | tr -d '[:space:]')
-
-            # Prompt the user for new values
-            echo ""
-            read -p "Enter a new port (or press enter to keep the current one [$current_port]): " new_port
-            [ -z "$new_port" ] && new_port=$current_port
-            
-            echo ""
-            read -p "Enter a new auth password (or press enter to keep [$current_password]): " new_password
-            [ -z "$new_password" ] && new_password=$current_password
-            
-            echo ""
-            read -p "Enter a new obfuscation password (or press enter to keep [$current_obfs]): " new_obfs
-            [ -z "$new_obfs" ] && new_obfs=$current_obfs
-
-            echo ""
-            read -p "Enter SNI / Bug Host (e.g., bing.com): " sni_host
-            [ -z "$sni_host" ] && sni_host="bing.com"
-            echo ""
-        
-            # Update the config.yaml using sed safely
-            sed -i "s/listen: :${current_port}/listen: :${new_port}/" config.yaml
-            sed -i "s/password: ${current_password}/password: ${new_password}/1" config.yaml
-            sed -i "s/password: ${current_obfs}/password: ${new_obfs}/2" config.yaml
-
-            # Kill the existing hysteria process, reload systemd and restart the hysteria service
-            pkill -f 'hysteria*'
-            systemctl daemon-reload
-            systemctl start hysteria
-
-            # Print client configs
-            PUBLIC_IP=$(curl -s https://api.ipify.org)
-
-            echo "v2rayN client config:"
-            v2rayN_config="server: $PUBLIC_IP:$new_port
-auth: $new_password
-obfs:
-  type: salamander
-  salamander:
-    password: $new_obfs
-transport:
-  type: udp
-tls:
-  sni: $sni_host
-  insecure: true
-bandwidth:
-  up: 100 mbps
-  down: 100 mbps
-quic:
-  initStreamReceiveWindow: 8388608
-  maxStreamReceiveWindow: 8388608
-  initConnReceiveWindow: 20971520
-  maxConnReceiveWindow: 20971520
-  maxIdleTimeout: 60s
-  keepAlivePeriod: 60s
-  disablePathMTUDiscovery: false
-fastOpen: true
-lazy: true
-socks5:
-  listen: 127.0.0.1:10808
-http:
-  listen: 127.0.0.1:10809"
-            echo "$v2rayN_config"
-            echo ""
-
-            echo "NekoBox/NekoRay URL:"
-            nekobox_url="hysteria2://$new_password@$PUBLIC_IP:$new_port/?insecure=1&sni=$sni_host&obfs=salamander&obfs-password=$new_obfs"
-            echo "$nekobox_url"
-            echo ""
-            exit 0
-            ;;
-        3)
             # Uninstall
             rm -rf /root/hysteria
             systemctl stop hysteria
             pkill -f 'hysteria'
             systemctl disable hysteria > /dev/null 2>&1
             rm /etc/systemd/system/hysteria.service
+            ~/.acme.sh/acme.sh --uninstall > /dev/null 2>&1
             echo "Hysteria uninstalled successfully!"
             echo ""
             exit 0
@@ -180,9 +101,39 @@ cd /root/hysteria
 wget -q "https://github.com/apernet/hysteria/releases/latest/download/$BINARY_NAME"
 chmod 755 "$BINARY_NAME"
 
-# Step 3: Create self-signed certs
-openssl ecparam -genkey -name prime256v1 -out ca.key
-openssl req -new -x509 -days 36500 -key ca.key -out ca.crt -subj "/CN=bing.com"
+# Step 3: Domain and Certificate Setup
+echo ""
+echo "--- Domain & SSL Setup ---"
+read -p "Enter your registered domain (e.g., vpn.yourdomain.com): " user_domain
+[ -z "$user_domain" ] && echo "Domain is required." && exit 1
+
+echo ""
+echo "IMPORTANT: Ensure $user_domain has an A record pointing to this VPS IP."
+echo "If using a CDN proxy, set the record to 'DNS Only'."
+read -p "Press Enter to continue once DNS is configured..."
+
+read -p "Enter an email for Let's Encrypt certificate registration: " le_email
+[ -z "$le_email" ] && le_email="admin@$user_domain"
+
+echo "Fetching Let's Encrypt certificates using acme.sh..."
+# Install acme.sh quietly
+curl -s https://get.acme.sh | sh
+~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+
+# Stop services that might block port 80 for the standalone verification
+systemctl stop nginx > /dev/null 2>&1
+systemctl stop apache2 > /dev/null 2>&1
+
+# Issue and install the cert
+~/.acme.sh/acme.sh --issue -d "$user_domain" --standalone -k ec-256 --force
+~/.acme.sh/acme.sh --installcert -d "$user_domain" --fullchainpath /root/hysteria/ca.crt --keypath /root/hysteria/ca.key --ecc
+
+# Fallback to self-signed if acme.sh fails
+if [ ! -f "/root/hysteria/ca.crt" ]; then
+    echo "Certificate fetch failed. Falling back to self-signed certs for $user_domain..."
+    openssl ecparam -genkey -name prime256v1 -out /root/hysteria/ca.key
+    openssl req -new -x509 -days 36500 -key /root/hysteria/ca.key -out /root/hysteria/ca.crt -subj "/CN=$user_domain"
+fi
 
 # Step 4: Prompt user for input
 echo ""
@@ -190,18 +141,18 @@ read -p "Enter a port (or press enter for a random port): " port
 [ -z "$port" ] && port=$((RANDOM + 10000))
 
 echo ""
-read -p "Enter a password (or press enter for a random password): " password
+read -p "Enter an Auth password (or press enter for a random password): " password
 [ -z "$password" ] && password=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 16 | head -n 1)
 
 echo ""
-read -p "Enter an Obfuscation password (or press enter for a random one): " obfs_password
+read -p "Enter an Obfuscation password (or press enter for random): " obfs_password
 [ -z "$obfs_password" ] && obfs_password=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 10 | head -n 1)
 
 echo ""
-read -p "Enter SNI / Bug Host (Default: bing.com): " sni_host
-[ -z "$sni_host" ] && sni_host="bing.com"
+read -p "Enter SNI / Bug Host (Default: $user_domain): " sni_host
+[ -z "$sni_host" ] && sni_host="$user_domain"
 
-# Create new config.yaml template based on your requirement
+# Create new config.yaml
 config_yaml="listen: :$port
 tls:
   cert: /root/hysteria/ca.crt
@@ -277,11 +228,18 @@ systemctl enable hysteria > /dev/null 2>&1
 systemctl start hysteria
 
 # Step 7: Generate and print client config files
-PUBLIC_IP=$(curl -s https://api.ipify.org)
+# If SNI matches the domain with a valid cert, we can set insecure to false, otherwise true.
+insecure_flag="true"
+insecure_num="1"
+if [ "$sni_host" == "$user_domain" ] && [ -f "/root/hysteria/ca.crt" ]; then
+    insecure_flag="false"
+    insecure_num="0"
+fi
+
 echo ""
 echo "v2rayN client config:"
 echo ""
-v2rayN_config="server: $PUBLIC_IP:$port
+v2rayN_config="server: $user_domain:$port
 auth: $password
 obfs:
   type: salamander
@@ -291,7 +249,7 @@ transport:
   type: udp
 tls:
   sni: $sni_host
-  insecure: true
+  insecure: $insecure_flag
 bandwidth:
   up: 100 mbps
   down: 100 mbps
@@ -314,7 +272,7 @@ echo "$v2rayN_config"
 echo ""
 echo "NekoBox/NekoRay URL:"
 echo ""
-nekobox_url="hysteria2://$password@$PUBLIC_IP:$port/?insecure=1&sni=$sni_host&obfs=salamander&obfs-password=$obfs_password"
+nekobox_url="hysteria2://$password@$user_domain:$port/?insecure=$insecure_num&sni=$sni_host&obfs=salamander&obfs-password=$obfs_password"
 echo ""
 echo "$nekobox_url"
 echo ""
