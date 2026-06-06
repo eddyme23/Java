@@ -14,7 +14,7 @@ print_with_delay() {
 # Introduction animation
 echo ""
 echo ""
-print_with_delay "hysteria2-installer by DEATHLINE | Modified for DPI Bypass (Salamander)" 0.1
+print_with_delay "hysteria2-installer by DEATHLINE | @NamelesGhoul" 0.1
 echo ""
 echo ""
 
@@ -55,31 +55,35 @@ if [ -d "/root/hysteria" ]; then
             # Modify
             cd /root/hysteria
         
-            # Get current variables
+            # Get the current port and password from config.yaml
             current_port=$(grep -oP 'listen: :\K\d+' config.yaml)
-            current_password=$(grep -m 1 'password:' config.yaml | awk -F': ' '{print $2}' | tr -d '[:space:]' | head -n 1)
-            current_obfs=$(grep -A 2 'salamander:' config.yaml | grep 'password:' | awk -F': ' '{print $2}' | tr -d '[:space:]')
-            [ -z "$current_obfs" ] && current_obfs=$current_password
-        
-            # Prompts
+            current_password=$(awk '/auth:/{flag=1; next} /type:/{if(flag) next} /password:/{if(flag) {print $2; exit}}' config.yaml | tr -d '[:space:]')
+            current_obfs=$(awk '/salamander:/{flag=1; next} /password:/{if(flag) {print $2; exit}}' config.yaml | tr -d '[:space:]')
+
+            # Prompt the user for new values
             echo ""
-            read -p "Enter a new port [$current_port]: " new_port
+            read -p "Enter a new port (or press enter to keep the current one [$current_port]): " new_port
             [ -z "$new_port" ] && new_port=$current_port
+            
             echo ""
-            read -p "Enter a new connection password [$current_password]: " new_password
+            read -p "Enter a new auth password (or press enter to keep [$current_password]): " new_password
             [ -z "$new_password" ] && new_password=$current_password
+            
             echo ""
-            read -p "Enter a new obfuscation password [$current_obfs]: " new_obfs
+            read -p "Enter a new obfuscation password (or press enter to keep [$current_obfs]): " new_obfs
             [ -z "$new_obfs" ] && new_obfs=$current_obfs
+
+            echo ""
+            read -p "Enter SNI / Bug Host (e.g., bing.com): " sni_host
+            [ -z "$sni_host" ] && sni_host="bing.com"
             echo ""
         
-            # Update config
+            # Update the config.yaml using sed safely
             sed -i "s/listen: :${current_port}/listen: :${new_port}/" config.yaml
-            # Replace the first password occurrence (auth block)
-            sed -i "0,/password: ${current_password}/s//password: ${new_password}/" config.yaml
-            # Replace the obfuscation password (salamander block)
-            sed -i "0,/password: ${current_obfs}/s//password: ${new_obfs}/" config.yaml
-            
+            sed -i "s/password: ${current_password}/password: ${new_password}/1" config.yaml
+            sed -i "s/password: ${current_obfs}/password: ${new_obfs}/2" config.yaml
+
+            # Kill the existing hysteria process, reload systemd and restart the hysteria service
             pkill -f 'hysteria*'
             systemctl daemon-reload
             systemctl start hysteria
@@ -90,12 +94,14 @@ if [ -d "/root/hysteria" ]; then
             echo "v2rayN client config:"
             v2rayN_config="server: $PUBLIC_IP:$new_port
 auth: $new_password
-obfs: salamander
-obfsPassword: $new_obfs
+obfs:
+  type: salamander
+  salamander:
+    password: $new_obfs
 transport:
   type: udp
 tls:
-  sni: $PUBLIC_IP
+  sni: $sni_host
   insecure: true
 bandwidth:
   up: 100 mbps
@@ -118,7 +124,7 @@ http:
             echo ""
 
             echo "NekoBox/NekoRay URL:"
-            nekobox_url="hysteria2://$new_password@$PUBLIC_IP:$new_port?insecure=1&sni=$PUBLIC_IP&obfs=salamander&obfs-password=$new_obfs#Hys2_Bypass"
+            nekobox_url="hysteria2://$new_password@$PUBLIC_IP:$new_port/?insecure=1&sni=$sni_host&obfs=salamander&obfs-password=$new_obfs"
             echo "$nekobox_url"
             echo ""
             exit 0
@@ -174,27 +180,28 @@ cd /root/hysteria
 wget -q "https://github.com/apernet/hysteria/releases/latest/download/$BINARY_NAME"
 chmod 755 "$BINARY_NAME"
 
-# Fetch IP early for SNI usage
-PUBLIC_IP=$(curl -s https://api.ipify.org)
-
 # Step 3: Create self-signed certs
 openssl ecparam -genkey -name prime256v1 -out ca.key
-openssl req -new -x509 -days 36500 -key ca.key -out ca.crt -subj "/CN=$PUBLIC_IP" >/dev/null 2>&1
+openssl req -new -x509 -days 36500 -key ca.key -out ca.crt -subj "/CN=bing.com"
 
 # Step 4: Prompt user for input
 echo ""
-read -p "Enter a port (e.g., 36712, 20335) or press enter for a random port: " port
+read -p "Enter a port (or press enter for a random port): " port
 [ -z "$port" ] && port=$((RANDOM + 10000))
 
 echo ""
-read -p "Enter a connection password (or press enter for a random password): " password
+read -p "Enter a password (or press enter for a random password): " password
 [ -z "$password" ] && password=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 16 | head -n 1)
 
 echo ""
-read -p "Enter a Salamander Obfuscation password (press enter to use the same as connection password): " obfs_password
-[ -z "$obfs_password" ] && obfs_password=$password
+read -p "Enter an Obfuscation password (or press enter for a random one): " obfs_password
+[ -z "$obfs_password" ] && obfs_password=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 10 | head -n 1)
 
-# Create new config.yaml template with Salamander Obfuscation integrated
+echo ""
+read -p "Enter SNI / Bug Host (Default: bing.com): " sni_host
+[ -z "$sni_host" ] && sni_host="bing.com"
+
+# Create new config.yaml template based on your requirement
 config_yaml="listen: :$port
 tls:
   cert: /root/hysteria/ca.crt
@@ -270,17 +277,20 @@ systemctl enable hysteria > /dev/null 2>&1
 systemctl start hysteria
 
 # Step 7: Generate and print client config files
+PUBLIC_IP=$(curl -s https://api.ipify.org)
 echo ""
 echo "v2rayN client config:"
 echo ""
 v2rayN_config="server: $PUBLIC_IP:$port
 auth: $password
-obfs: salamander
-obfsPassword: $obfs_password
+obfs:
+  type: salamander
+  salamander:
+    password: $obfs_password
 transport:
   type: udp
 tls:
-  sni: $PUBLIC_IP
+  sni: $sni_host
   insecure: true
 bandwidth:
   up: 100 mbps
@@ -304,7 +314,7 @@ echo "$v2rayN_config"
 echo ""
 echo "NekoBox/NekoRay URL:"
 echo ""
-nekobox_url="hysteria2://$password@$PUBLIC_IP:$port?insecure=1&sni=$PUBLIC_IP&obfs=salamander&obfs-password=$obfs_password#Hys2_Bypass"
+nekobox_url="hysteria2://$password@$PUBLIC_IP:$port/?insecure=1&sni=$sni_host&obfs=salamander&obfs-password=$obfs_password"
 echo ""
 echo "$nekobox_url"
 echo ""
