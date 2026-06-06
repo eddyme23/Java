@@ -37,7 +37,9 @@ if [ -d "/root/hysteria" ]; then
     echo ""
     echo "1) Reinstall"
     echo ""
-    echo "2) Uninstall"
+    echo "2) Modify Config"
+    echo ""
+    echo "3) Uninstall"
     echo ""
     read -p "Enter your choice: " choice
     case $choice in
@@ -50,6 +52,79 @@ if [ -d "/root/hysteria" ]; then
             rm /etc/systemd/system/hysteria.service
             ;;
         2)
+            # Modify
+            cd /root/hysteria
+        
+            # Get current parameters
+            current_port=$(grep -oP 'listen: :\K\d+' config.yaml)
+            current_password=$(awk '/auth:/{flag=1; next} /type:/{if(flag) next} /password:/{if(flag) {print $2; exit}}' config.yaml | tr -d '[:space:]')
+            current_obfs=$(awk '/salamander:/{flag=1; next} /password:/{if(flag) {print $2; exit}}' config.yaml | tr -d '[:space:]')
+
+            # Prompts
+            echo ""
+            read -p "Enter a new port [$current_port]: " new_port
+            [ -z "$new_port" ] && new_port=$current_port
+            
+            echo ""
+            read -p "Enter a new auth password [$current_password]: " new_password
+            [ -z "$new_password" ] && new_password=$current_password
+            
+            echo ""
+            read -p "Enter a new obfuscation password [$current_obfs]: " new_obfs
+            [ -z "$new_obfs" ] && new_obfs=$current_obfs
+
+            echo ""
+            read -p "Enter SNI / Bug Host (e.g., bing.com): " sni_host
+            [ -z "$sni_host" ] && sni_host="bing.com"
+        
+            # Update config safely
+            sed -i "s/listen: :${current_port}/listen: :${new_port}/" config.yaml
+            sed -i "s/password: ${current_password}/password: ${new_password}/1" config.yaml
+            sed -i "s/password: ${current_obfs}/password: ${new_obfs}/2" config.yaml
+            
+            systemctl daemon-reload
+            systemctl restart hysteria
+
+            # Print client configs
+            PUBLIC_IP=$(curl -s https://api.ipify.org)
+
+            echo ""
+            echo "v2rayN client config:"
+            v2rayN_config="server: $PUBLIC_IP:$new_port
+auth: $new_password
+obfs:
+  type: salamander
+  salamander:
+    password: $new_obfs
+transport:
+  type: udp
+tls:
+  sni: $sni_host
+  insecure: true
+quic:
+  initStreamReceiveWindow: 8388608
+  maxStreamReceiveWindow: 8388608
+  initConnReceiveWindow: 20971520
+  maxConnReceiveWindow: 20971520
+  maxIdleTimeout: 60s
+  keepAlivePeriod: 60s
+  disablePathMTUDiscovery: false
+fastOpen: true
+lazy: true
+socks5:
+  listen: 127.0.0.1:10808
+http:
+  listen: 127.0.0.1:10809"
+            echo "$v2rayN_config"
+            echo ""
+
+            echo "NekoBox/NekoRay URL:"
+            nekobox_url="hysteria2://$new_password@$PUBLIC_IP:$new_port/?insecure=1&sni=$sni_host&obfs=salamander&obfs-password=$new_obfs"
+            echo "$nekobox_url"
+            echo ""
+            exit 0
+            ;;
+        3)
             # Uninstall
             rm -rf /root/hysteria
             systemctl stop hysteria
@@ -68,14 +143,13 @@ if [ -d "/root/hysteria" ]; then
     esac
 fi
 
-# Install required packages if not already installed
+# Install required packages
 install_required_packages
 
 # Step 1: Check OS and architecture
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
-# Determine binary name
 BINARY_NAME=""
 case "$OS" in
   Linux)
@@ -101,41 +175,35 @@ cd /root/hysteria
 wget -q "https://github.com/apernet/hysteria/releases/latest/download/$BINARY_NAME"
 chmod 755 "$BINARY_NAME"
 
-# Step 3: Domain and Certificate Setup
+# Step 3: Domain and SSL Verification
 echo ""
 echo "--- Domain & SSL Setup ---"
 read -p "Enter your registered domain (e.g., vpn.yourdomain.com): " user_domain
-[ -z "$user_domain" ] && echo "Domain is required." && exit 1
+[ -z "$user_domain" ] && echo "Domain is required. Exiting." && exit 1
 
 echo ""
 echo "IMPORTANT: Ensure $user_domain has an A record pointing to this VPS IP."
-echo "If using a CDN proxy, set the record to 'DNS Only'."
+echo "If using Cloudflare, set the proxy status to 'DNS Only' (Grey Cloud)."
 read -p "Press Enter to continue once DNS is configured..."
 
-read -p "Enter an email for Let's Encrypt certificate registration: " le_email
-[ -z "$le_email" ] && le_email="admin@$user_domain"
-
 echo "Fetching Let's Encrypt certificates using acme.sh..."
-# Install acme.sh quietly
-curl -s https://get.acme.sh | sh
-~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-
-# Stop services that might block port 80 for the standalone verification
+# Temporarily stop web servers to free port 80 for standalone verification
 systemctl stop nginx > /dev/null 2>&1
 systemctl stop apache2 > /dev/null 2>&1
 
-# Issue and install the cert
+curl -s https://get.acme.sh | sh
+~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 ~/.acme.sh/acme.sh --issue -d "$user_domain" --standalone -k ec-256 --force
 ~/.acme.sh/acme.sh --installcert -d "$user_domain" --fullchainpath /root/hysteria/ca.crt --keypath /root/hysteria/ca.key --ecc
 
 # Fallback to self-signed if acme.sh fails
 if [ ! -f "/root/hysteria/ca.crt" ]; then
-    echo "Certificate fetch failed. Falling back to self-signed certs for $user_domain..."
+    echo "Certificate fetch failed. Falling back to self-signed certs..."
     openssl ecparam -genkey -name prime256v1 -out /root/hysteria/ca.key
     openssl req -new -x509 -days 36500 -key /root/hysteria/ca.key -out /root/hysteria/ca.crt -subj "/CN=$user_domain"
 fi
 
-# Step 4: Prompt user for input
+# Step 4: Prompt user for core inputs
 echo ""
 read -p "Enter a port (or press enter for a random port): " port
 [ -z "$port" ] && port=$((RANDOM + 10000))
@@ -152,7 +220,7 @@ echo ""
 read -p "Enter SNI / Bug Host (Default: $user_domain): " sni_host
 [ -z "$sni_host" ] && sni_host="$user_domain"
 
-# Create new config.yaml
+# Create server config.yaml
 config_yaml="listen: :$port
 tls:
   cert: /root/hysteria/ca.crt
@@ -172,10 +240,6 @@ quic:
   maxIdleTimeout: 60s
   maxIncomingStreams: 1024
   disablePathMTUDiscovery: false
-bandwidth:
-  up: 1 gbps
-  down: 1 gbps
-ignoreClientBandwidth: false
 disableUDP: false
 udpIdleTimeout: 60s
 resolver:
@@ -199,10 +263,10 @@ resolver:
     
 echo "$config_yaml" > config.yaml
 
-# Step 5: Run the binary and check the log
+# Step 5: Run binary
 /root/hysteria/$BINARY_NAME server -c /root/hysteria/config.yaml > hysteria.log 2>&1 &
 
-# Step 6: Create a system service
+# Step 6: Create system service
 cat > /etc/systemd/system/hysteria.service <<EOL
 [Unit]
 Description=Hysteria VPN Service
@@ -227,8 +291,8 @@ systemctl daemon-reload
 systemctl enable hysteria > /dev/null 2>&1
 systemctl start hysteria
 
-# Step 7: Generate and print client config files
-# If SNI matches the domain with a valid cert, we can set insecure to false, otherwise true.
+# Step 7: Generate Client Configs
+# Determine TLS insecurity based on SNI and valid cert presence
 insecure_flag="true"
 insecure_num="1"
 if [ "$sni_host" == "$user_domain" ] && [ -f "/root/hysteria/ca.crt" ]; then
@@ -250,9 +314,6 @@ transport:
 tls:
   sni: $sni_host
   insecure: $insecure_flag
-bandwidth:
-  up: 100 mbps
-  down: 100 mbps
 quic:
   initStreamReceiveWindow: 8388608
   maxStreamReceiveWindow: 8388608
@@ -267,12 +328,11 @@ socks5:
   listen: 127.0.0.1:10808
 http:
   listen: 127.0.0.1:10809"
-echo ""
 echo "$v2rayN_config"
 echo ""
+
 echo "NekoBox/NekoRay URL:"
 echo ""
 nekobox_url="hysteria2://$password@$user_domain:$port/?insecure=$insecure_num&sni=$sni_host&obfs=salamander&obfs-password=$obfs_password"
-echo ""
 echo "$nekobox_url"
 echo ""
