@@ -448,30 +448,20 @@ systemctl daemon-reload; systemctl enable xray; systemctl restart xray
 cat <<'EOF_EXP' > /usr/local/bin/exp-check
 #!/bin/bash
 now=$(date +%Y-%m-%d)
-changed=0
-
 for proto in vless vmess trojan; do
-  db_file="/etc/xray/${proto}.txt"
-  if [ -f "$db_file" ]; then
-    # Read expired users into an array securely to avoid read/write collisions
-    mapfile -t expired_users < <(awk -v d="$now" '$3 < d {print $1}' "$db_file")
-    
-    for user in "${expired_users[@]}"; do
-      # Remove from JSON config
-      jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
-      # Remove from TXT DB
-      sed -i "/^$user /d" "$db_file"
-      changed=1
+  if [ -f "/etc/xray/${proto}.txt" ]; then
+    data=( $(cat /etc/xray/${proto}.txt | awk '{print $1}') )
+    for user in "${data[@]}"; do
+      exp=$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $3}')
+      if [[ "$now" > "$exp" ]]; then
+        jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+        sed -i "/^$user /d" /etc/xray/${proto}.txt
+      fi
     done
   fi
 done
-
-# Only drop active connections and restart the core if a user was actually removed
-if [ "$changed" -eq 1 ]; then
-  systemctl restart xray
-fi
+systemctl restart xray
 EOF_EXP
-
 chmod +x /usr/local/bin/exp-check
 echo "0 0 * * * root /usr/local/bin/exp-check >/dev/null 2>&1" > /etc/cron.d/xray-expiry
 
@@ -1323,69 +1313,37 @@ online_users() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
 
   echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
+  declare -A active_ssh
+  mapfile -t USERS < <(awk -F: '$3 >= 1000 && $1 != "nobody" && $1 != "systemd-network" && $1 != "messagebus" {print $1}' /etc/passwd 2>/dev/null)
   
-  TMP_LOG="/tmp/active_auth.log"
-  rm -f "$TMP_LOG"
-  
-  if [ -f "/var/log/auth.log" ]; then
-      cat "/var/log/auth.log" > "$TMP_LOG"
-  elif [ -f "/var/log/secure" ]; then
-      cat "/var/log/secure" > "$TMP_LOG"
+  for user in "${USERS[@]}"; do
+      ssh_count=$(ps -u "$user" 2>/dev/null | grep -c "sshd")
+      drop_count=$(ps -ef 2>/dev/null | grep -i "dropbear" | grep -w "$user" | grep -v grep | wc -l)
+      total=$((ssh_count + drop_count))
+      if [ "$total" -gt 0 ]; then active_ssh["$user"]=$total; fi
+  done
+
+  if [ "${#active_ssh[@]}" -eq 0 ]; then 
+      echo -e "  No authenticated legacy SSH users are currently online.\n"
   else
-      journalctl -u ssh --no-pager 2>/dev/null > "$TMP_LOG"
-      journalctl -u dropbear --no-pager 2>/dev/null >> "$TMP_LOG"
-  fi
-  
-  declare -A session_counts
-  
-  if [ -s "$TMP_LOG" ]; then
-      # Track Dropbear Logins (Strip single quotes)
-      db_pids=( $(ps aux | grep -i dropbear | grep -v grep | awk '{print $2}') )
-      grep -i "dropbear" "$TMP_LOG" | grep -i "Password auth succeeded" > /tmp/login-db.txt
-      for PID in "${db_pids[@]}"; do
-          USER=$(grep "dropbear\[$PID\]" /tmp/login-db.txt | awk '{print $10}' | tr -d "'" | head -n 1)
-          [ -n "$USER" ] && session_counts["$USER"]=$((session_counts["$USER"]+1))
-      done
-      
-      # Track OpenSSH Logins (Strip single quotes just in case)
-      grep -i "sshd" "$TMP_LOG" | grep -i "Accepted password for" > /tmp/login-sshd.txt
-      ssh_pids=( $(ps aux | grep "\[priv\]" | awk '{print $2}') )
-      for PID in "${ssh_pids[@]}"; do
-          USER=$(grep "sshd\[$PID\]" /tmp/login-sshd.txt | awk '{print $9}' | tr -d "'" | head -n 1)
-          [ -n "$USER" ] && session_counts["$USER"]=$((session_counts["$USER"]+1))
-      done
-      
-      rm -f /tmp/login-db.txt /tmp/login-sshd.txt "$TMP_LOG"
-      
-      if [ ${#session_counts[@]} -eq 0 ]; then
-          echo -e "  No authenticated legacy SSH users are currently online.\n"
-      else
-          printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
-          echo -e "${CYAN}  ----------------------------------------------------------${NC}"
-          for user in "${!session_counts[@]}"; do
-              if [ "${session_counts[$user]}" -gt 1 ]; then
-                  printf "  %-25s ${RED}%-15s (Multi-Login)${NC}\n" "$user" "${session_counts[$user]}"
-              else
-                  printf "  %-25s ${GREEN}%-15s${NC}\n" "$user" "${session_counts[$user]}"
-              fi
-          done | sort
-          echo
-      fi
-  else
-      echo -e "  ${RED}No recent authentication logs found.${NC}\n"
+    printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
+    echo -e "${CYAN}  ----------------------------------------------------------${NC}"
+    for user in "${!active_ssh[@]}"; do 
+        if [ "${active_ssh[$user]}" -gt 1 ]; then
+            printf "  %-25s ${RED}%-15s (Multi-Login)${NC}\n" "$user" "${active_ssh[$user]}"
+        else
+            printf "  %-25s ${GREEN}%-15s${NC}\n" "$user" "${active_ssh[$user]}"
+        fi
+    done | sort
+    echo
   fi
 
   echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent Unique IPs) ---${NC}"
-  
-  # Ensure the Xray log directory and files exist to prevent read errors
-  mkdir -p /var/log/xray
-  touch /var/log/xray/access.log /var/log/xray/error.log
-
   if grep -q '"loglevel": "warning"' /etc/xray/config.json 2>/dev/null; then
       sed -i 's/"loglevel": "warning"/"loglevel": "info"/g' /etc/xray/config.json
       systemctl restart xray 2>/dev/null
       echo -e "  [System Note] Xray logging enabled. Reconnect users to see logs.\n"
-  else
+  elif [ -f /var/log/xray/access.log ]; then
       active_xray=$(tail -n 10000 /var/log/xray/access.log 2>/dev/null | grep "accepted" | awk '{ user=""; for(i=1;i<=NF;i++) if($i=="email:") user=$(i+1); if(user!="") { split($3, a, ":"); print user " " a[1] } }' | sort -u | awk '{print $1}' | uniq -c | sort -nr)
       if [ -z "$active_xray" ]; then 
           echo -e "  No active Xray users found in recent logs.\n"
@@ -1402,7 +1360,7 @@ online_users() {
               fi
           done <<< "$active_xray"
       fi
-  fi
+  else echo -e "  Xray access log not found.\n"; fi
   
   pause_return
 }
