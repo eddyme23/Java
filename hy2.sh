@@ -1,283 +1,133 @@
 #!/bin/bash
 
-# Function to print characters with delay
-print_with_delay() {
-    text="$1"
-    delay="$2"
-    for ((i = 0; i < ${#text}; i++)); do
-        echo -n "${text:$i:1}"
-        sleep $delay
-    done
-    echo
-}
+# --- Color Formatting & Utilities ---
+red='\033[0;31m'
+green='\033[0;32m'
+yellow='\033[0;33m'
+plain='\033[0m'
 
-# Introduction animation
-echo ""
-echo ""
-print_with_delay "hysteria2-installer by DEATHLINE | @NamelesGhoul" 0.1
-echo ""
-echo ""
+red(){ echo -e "\033[31m\033[01m$1\033[0m";}
+green(){ echo -e "\033[32m\033[01m$1\033[0m";}
+yellow(){ echo -e "\033[33m\033[01m$1\033[0m";}
+readp(){ read -p "$(yellow "$1")" $2;}
 
-# Check for and install required packages
-install_required_packages() {
-    REQUIRED_PACKAGES=("curl" "openssl" "socat" "cron")
-    for pkg in "${REQUIRED_PACKAGES[@]}"; do
-        if ! command -v $pkg &> /dev/null; then
-            apt-get update > /dev/null 2>&1
-            apt-get install -y $pkg > /dev/null 2>&1
+# --- Dependency Checker ---
+echo "Checking dependencies..."
+sudo apt-get update -y > /dev/null 2>&1
+for pkg in qrencode jq net-tools openssl wget curl nano iptables-persistent; do
+    if ! command -v $pkg &> /dev/null; then
+        yellow "$pkg is not installed. Installing..."
+        sudo apt-get install $pkg -y > /dev/null 2>&1
+    fi
+done
+green "Dependencies are installed."
+
+# --- 1. Install / Update Hysteria V2 ---
+run_hysteria_v2_setup() {
+    clear
+    echo "Running Hysteria v2 Setup (Guruz Edition: Port-Hopping + Obfuscation)..."
+    sleep 1
+
+    if [ "$EUID" -eq 0 ]; then
+        user_directory="/root/hy2"
+    else
+        user_directory="/home/$USER/hy2"
+    fi
+
+    if [ -d "$user_directory" ]; then
+        clear
+        echo "--------------------------------------------------------------------------------"
+        echo -e "\e[1;33mHysteria directory already exists. Checking for latest version..\e[0m"
+        echo "--------------------------------------------------------------------------------"
+        sleep 2
+
+        if [ -f "$user_directory/config.json" ]; then
+            password=$(jq -r '.auth.password' <<< "$(< "$user_directory/config.json")")
+        else
+            echo "Error: config.json file not found in Hysteria directory."
+            return
         fi
-    done
+    else
+        # Matching your xfc.sh exact parameters
+        base_port="36712"
+        range_start="20000"
+        range_end="50000"
+        
+        readp "Enter the Connection/Obfuscation password: " password
+
+        mkdir -p "$user_directory"
+        cd "$user_directory"
+
+        # Crash-Proof JSON config (listening on base port 36712 with Salamander enabled)
+        cat << EOF > "$user_directory/config.json"
+{
+  "listen": ":$base_port",
+  "obfs": {
+    "type": "salamander",
+    "salamander": {
+      "password": "$password"
+    }
+  },
+  "tls": {
+    "cert": "$user_directory/ca.crt",
+    "key": "$user_directory/ca.key"
+  },
+  "auth": {
+    "type": "password",
+    "password": "$password"
+  },
+  "bandwidth": {
+    "up": "1 gbps",
+    "down": "1 gbps"
+  },
+  "ignoreClientBandwidth": false,
+  "disableUDP": false,
+  "udpIdleTimeout": "60s"
 }
+EOF
 
-# Check if the directory /root/hysteria already exists
-if [ -d "/root/hysteria" ]; then
-    echo "Hysteria seems to be already installed."
-    echo ""
-    echo "Choose an option:"
-    echo ""
-    echo "1) Reinstall"
-    echo ""
-    echo "2) Modify Config"
-    echo ""
-    echo "3) Uninstall"
-    echo ""
-    read -p "Enter your choice: " choice
-    case $choice in
-        1)
-            # Reinstall
-            rm -rf /root/hysteria
-            systemctl stop hysteria
-            pkill -f 'hysteria*'
-            systemctl disable hysteria > /dev/null 2>&1
-            rm /etc/systemd/system/hysteria.service
-            ;;
-        2)
-            # Modify
-            cd /root/hysteria
+        # Apply IPTables routing for Port Hopping (20000-50000 -> 36712)
+        echo "Applying iptables rules for UDP port hopping ($range_start-$range_end)..."
+        iptables -t nat -C PREROUTING -p udp --dport $range_start:$range_end -j DNAT --to-destination :$base_port 2>/dev/null || iptables -t nat -A PREROUTING -p udp --dport $range_start:$range_end -j DNAT --to-destination :$base_port
+        ip6tables -t nat -C PREROUTING -p udp --dport $range_start:$range_end -j DNAT --to-destination :$base_port 2>/dev/null || ip6tables -t nat -A PREROUTING -p udp --dport $range_start:$range_end -j DNAT --to-destination :$base_port
         
-            # Get current parameters
-            current_port=$(grep -oP 'listen: :\K\d+' config.yaml)
-            current_password=$(awk '/auth:/{flag=1; next} /type:/{if(flag) next} /password:/{if(flag) {print $2; exit}}' config.yaml | tr -d '[:space:]')
-            current_obfs=$(awk '/salamander:/{flag=1; next} /password:/{if(flag) {print $2; exit}}' config.yaml | tr -d '[:space:]')
+        # Save firewall rules
+        netfilter-persistent save >/dev/null 2>&1 || true
+    fi
 
-            # Prompts
-            echo ""
-            read -p "Enter a new port [$current_port]: " new_port
-            [ -z "$new_port" ] && new_port=$current_port
-            
-            echo ""
-            read -p "Enter a new auth password [$current_password]: " new_password
-            [ -z "$new_password" ] && new_password=$current_password
-            
-            echo ""
-            read -p "Enter a new obfuscation password [$current_obfs]: " new_obfs
-            [ -z "$new_obfs" ] && new_obfs=$current_obfs
+    latest_version=$(curl -s https://api.github.com/repos/apernet/hysteria/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+    echo -e "\e[1;33m---> Installing hysteria ver $latest_version\e[0m"
+    echo "--------------------------------------------------------------------------------"
+    sleep 2
 
-            echo ""
-            read -p "Enter SNI / Bug Host (e.g., bing.com): " sni_host
-            [ -z "$sni_host" ] && sni_host="bing.com"
-        
-            # Update config safely
-            sed -i "s/listen: :${current_port}/listen: :${new_port}/" config.yaml
-            sed -i "s/password: ${current_password}/password: ${new_password}/1" config.yaml
-            sed -i "s/password: ${current_obfs}/password: ${new_obfs}/2" config.yaml
-            
-            systemctl daemon-reload
-            systemctl restart hysteria
+    rm -f hysteria-linux-amd64
 
-            # Print client configs
-            PUBLIC_IP=$(curl -s https://api.ipify.org)
+    architecture=$(uname -m)
+    if [ "$architecture" = "x86_64" ]; then
+        wget -q --show-progress "https://github.com/apernet/hysteria/releases/download/$latest_version/hysteria-linux-amd64"
+    else
+        wget -q --show-progress "https://github.com/apernet/hysteria/releases/download/$latest_version/hysteria-linux-arm"
+        mv hysteria-linux-arm hysteria-linux-amd64
+    fi
 
-            echo ""
-            echo "v2rayN client config:"
-            v2rayN_config="server: $PUBLIC_IP:$new_port
-auth: $new_password
-obfs:
-  type: salamander
-  salamander:
-    password: $new_obfs
-transport:
-  type: udp
-tls:
-  sni: $sni_host
-  insecure: true
-quic:
-  initStreamReceiveWindow: 8388608
-  maxStreamReceiveWindow: 8388608
-  initConnReceiveWindow: 20971520
-  maxConnReceiveWindow: 20971520
-  maxIdleTimeout: 60s
-  keepAlivePeriod: 60s
-  disablePathMTUDiscovery: false
-fastOpen: true
-lazy: true
-socks5:
-  listen: 127.0.0.1:10808
-http:
-  listen: 127.0.0.1:10809"
-            echo "$v2rayN_config"
-            echo ""
+    chmod 755 hysteria-linux-amd64
 
-            echo "NekoBox/NekoRay URL:"
-            nekobox_url="hysteria2://$new_password@$PUBLIC_IP:$new_port/?insecure=1&sni=$sni_host&obfs=salamander&obfs-password=$new_obfs"
-            echo "$nekobox_url"
-            echo ""
-            exit 0
-            ;;
-        3)
-            # Uninstall
-            rm -rf /root/hysteria
-            systemctl stop hysteria
-            pkill -f 'hysteria'
-            systemctl disable hysteria > /dev/null 2>&1
-            rm /etc/systemd/system/hysteria.service
-            ~/.acme.sh/acme.sh --uninstall > /dev/null 2>&1
-            echo "Hysteria uninstalled successfully!"
-            echo ""
-            exit 0
-            ;;
-        *)
-            echo "Invalid choice."
-            exit 1
-            ;;
-    esac
-fi
+    if [ ! -f "$user_directory/ca.key" ] || [ ! -f "$user_directory/ca.crt" ]; then
+        openssl ecparam -genkey -name prime256v1 -out "$user_directory/ca.key"
+        openssl req -new -x509 -days 36500 -key "$user_directory/ca.key" -out "$user_directory/ca.crt" -subj "/CN=bing.com" 2>/dev/null
+    fi
 
-# Install required packages
-install_required_packages
-
-# Step 1: Check OS and architecture
-OS="$(uname -s)"
-ARCH="$(uname -m)"
-
-BINARY_NAME=""
-case "$OS" in
-  Linux)
-    case "$ARCH" in
-      x86_64) BINARY_NAME="hysteria-linux-amd64";;
-      386) BINARY_NAME="hysteria-linux-386";;
-      amd64) BINARY_NAME="hysteria-linux-amd64";;
-      arm64) BINARY_NAME="hysteria-linux-arm64";;
-      mipsle) BINARY_NAME="hysteria-linux-mipsle";;
-      s390x) BINARY_NAME="hysteria-linux-s390x";;
-      amd64-avx) BINARY_NAME="hysteria-linux-amd64-avx";;
-      arm) BINARY_NAME="hysteria-linux-arm";;
-      armv5) BINARY_NAME="hysteria-linux-armv5";;
-      mipsle-sf) BINARY_NAME="hysteria-linux-mipsle-sf";;
-      *) echo "Unsupported architecture"; exit 1;;
-    esac;;
-  *) echo "Unsupported OS"; exit 1;;
-esac
-
-# Step 2: Download the binary
-mkdir -p /root/hysteria
-cd /root/hysteria
-wget -q "https://github.com/apernet/hysteria/releases/latest/download/$BINARY_NAME"
-chmod 755 "$BINARY_NAME"
-
-# Step 3: Domain and SSL Verification
-echo ""
-echo "--- Domain & SSL Setup ---"
-read -p "Enter your registered domain (e.g., vpn.yourdomain.com): " user_domain
-[ -z "$user_domain" ] && echo "Domain is required. Exiting." && exit 1
-
-echo ""
-echo "IMPORTANT: Ensure $user_domain has an A record pointing to this VPS IP."
-echo "If using Cloudflare, set the proxy status to 'DNS Only' (Grey Cloud)."
-read -p "Press Enter to continue once DNS is configured..."
-
-echo "Fetching Let's Encrypt certificates using acme.sh..."
-# Temporarily stop web servers to free port 80 for standalone verification
-systemctl stop nginx > /dev/null 2>&1
-systemctl stop apache2 > /dev/null 2>&1
-
-curl -s https://get.acme.sh | sh
-~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-~/.acme.sh/acme.sh --issue -d "$user_domain" --standalone -k ec-256 --force
-~/.acme.sh/acme.sh --installcert -d "$user_domain" --fullchainpath /root/hysteria/ca.crt --keypath /root/hysteria/ca.key --ecc
-
-# Fallback to self-signed if acme.sh fails
-if [ ! -f "/root/hysteria/ca.crt" ]; then
-    echo "Certificate fetch failed. Falling back to self-signed certs..."
-    openssl ecparam -genkey -name prime256v1 -out /root/hysteria/ca.key
-    openssl req -new -x509 -days 36500 -key /root/hysteria/ca.key -out /root/hysteria/ca.crt -subj "/CN=$user_domain"
-fi
-
-# Step 4: Prompt user for core inputs
-echo ""
-read -p "Enter a port (or press enter for a random port): " port
-[ -z "$port" ] && port=$((RANDOM + 10000))
-
-echo ""
-read -p "Enter an Auth password (or press enter for a random password): " password
-[ -z "$password" ] && password=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 16 | head -n 1)
-
-echo ""
-read -p "Enter an Obfuscation password (or press enter for random): " obfs_password
-[ -z "$obfs_password" ] && obfs_password=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 10 | head -n 1)
-
-echo ""
-read -p "Enter SNI / Bug Host (Default: $user_domain): " sni_host
-[ -z "$sni_host" ] && sni_host="$user_domain"
-
-# Create server config.yaml
-config_yaml="listen: :$port
-tls:
-  cert: /root/hysteria/ca.crt
-  key: /root/hysteria/ca.key
-auth:
-  type: password
-  password: $password
-obfs:
-  type: salamander
-  salamander:
-    password: $obfs_password
-quic:
-  initStreamReceiveWindow: 8388608
-  maxStreamReceiveWindow: 8388608
-  initConnReceiveWindow: 20971520
-  maxConnReceiveWindow: 20971520
-  maxIdleTimeout: 60s
-  maxIncomingStreams: 1024
-  disablePathMTUDiscovery: false
-disableUDP: false
-udpIdleTimeout: 60s
-resolver:
-  type: udp
-  tcp:
-    addr: 8.8.8.8:53
-    timeout: 4s
-  udp:
-    addr: 8.8.4.4:53
-    timeout: 4s
-  tls:
-    addr: 1.1.1.1:853
-    timeout: 10s
-    sni: cloudflare-dns.com
-    insecure: false
-  https:
-    addr: 1.1.1.1:443
-    timeout: 10s
-    sni: cloudflare-dns.com
-    insecure: false"
-    
-echo "$config_yaml" > config.yaml
-
-# Step 5: Run binary
-/root/hysteria/$BINARY_NAME server -c /root/hysteria/config.yaml > hysteria.log 2>&1 &
-
-# Step 6: Create system service
-cat > /etc/systemd/system/hysteria.service <<EOL
+    if [ ! -f "/etc/systemd/system/hy2.service" ]; then
+        cat << EOF > /etc/systemd/system/hy2.service
 [Unit]
-Description=Hysteria VPN Service
 After=network.target nss-lookup.target
 
 [Service]
 User=root
-WorkingDirectory=/root/hysteria
+WorkingDirectory=$user_directory
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-ExecStart=/root/hysteria/$BINARY_NAME server -c /root/hysteria/config.yaml
+ExecStart=$user_directory/hysteria-linux-amd64 -c $user_directory/config.json server
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=5
@@ -285,54 +135,139 @@ LimitNOFILE=infinity
 
 [Install]
 WantedBy=multi-user.target
-EOL
+EOF
+        systemctl daemon-reload
+        systemctl enable hy2
+    fi
 
-systemctl daemon-reload
-systemctl enable hysteria > /dev/null 2>&1
-systemctl start hysteria
+    systemctl restart hy2
+    green "Hysteria V2 (Port Hopping + Obfuscation) Installation Complete!"
+}
 
-# Step 7: Generate Client Configs
-# Determine TLS insecurity based on SNI and valid cert presence
-insecure_flag="true"
-insecure_num="1"
-if [ "$sni_host" == "$user_domain" ] && [ -f "/root/hysteria/ca.crt" ]; then
-    insecure_flag="false"
-    insecure_num="0"
-fi
+# --- 2. Change Parameters ---
+change_hy2_parameters() {
+    local user_directory
+    if [ "$EUID" -eq 0 ]; then user_directory="/root/hy2"; else user_directory="/home/$USER/hy2"; fi
 
-echo ""
-echo "v2rayN client config:"
-echo ""
-v2rayN_config="server: $user_domain:$port
-auth: $password
-obfs:
-  type: salamander
-  salamander:
-    password: $obfs_password
-transport:
-  type: udp
-tls:
-  sni: $sni_host
-  insecure: $insecure_flag
-quic:
-  initStreamReceiveWindow: 8388608
-  maxStreamReceiveWindow: 8388608
-  initConnReceiveWindow: 20971520
-  maxConnReceiveWindow: 20971520
-  maxIdleTimeout: 60s
-  keepAlivePeriod: 60s
-  disablePathMTUDiscovery: false
-fastOpen: true
-lazy: true
-socks5:
-  listen: 127.0.0.1:10808
-http:
-  listen: 127.0.0.1:10809"
-echo "$v2rayN_config"
-echo ""
+    if [ -d "$user_directory" ]; then
+        echo "Hysteria directory exists. You can change parameters here."
+        password=$(jq -r '.auth.password' "$user_directory/config.json")
+        readp "Enter a new password [$password]: " new_password
+        
+        jq ".auth.password = \"${new_password:-$password}\" | .obfs.salamander.password = \"${new_password:-$password}\"" "$user_directory/config.json" > tmp_config.json
+        mv tmp_config.json "$user_directory/config.json"
+        
+        systemctl restart hy2
+        green "Parameters updated successfully."
+    else
+        red "Hysteria directory does not exist. Please install Hysteria first."
+    fi
+}
 
-echo "NekoBox/NekoRay URL:"
-echo ""
-nekobox_url="hysteria2://$password@$user_domain:$port/?insecure=$insecure_num&sni=$sni_host&obfs=salamander&obfs-password=$obfs_password"
-echo "$nekobox_url"
-echo ""
+# --- 3. Show Configs ---
+show_hy2_configs() {
+    local user_directory
+    if [ "$EUID" -eq 0 ]; then user_directory="/root/hy2"; else user_directory="/home/$USER/hy2"; fi
+
+    if [ -d "$user_directory" ]; then
+        password=$(jq -r '.auth.password' "$user_directory/config.json")
+        base_port=$(jq -r '.listen' "$user_directory/config.json" | cut -c 2-)
+        
+        systemctl stop wg-quick@wgcf 2>/dev/null || true
+        export IPV4=$(curl -s --max-time 3 https://v4.ident.me || curl -s --max-time 3 https://api.ipify.org)
+        systemctl restart wg-quick@wgcf 2>/dev/null || true
+
+        # Formatted cleanly with Obfuscation and Port Hopping for Android App parsing
+        IPV4_URL="hysteria2://$password@$IPV4:$base_port/?mport=20000-50000&obfs=salamander&obfs-password=$password&insecure=1&sni=bing.com#GuruzVPN-Hy2"
+
+        clear
+        echo "----------------config info-----------------"
+        echo -e "\e[1;33mPassword: $password\e[0m"
+        echo "--------------------------------------------"
+        echo
+        echo "----------------IP and Port-----------------"
+        echo -e "\e[1;33mBase Port:   $base_port\e[0m"
+        echo -e "\e[1;33mPort Range:  20000-50000\e[0m"
+        echo -e "\e[1;33mIPv4:        $IPV4\e[0m"
+        echo -e "\e[1;33mObfuscation: Salamander Enabled\e[0m"
+        echo "--------------------------------------------"
+        echo
+        echo "----------------Android / v2rayNG URL-----------------"
+        echo -e "\e[1;33m$IPV4_URL\e[0m"
+        echo "--------------------------------------------"
+        echo "Scanning QR Code below:"
+        qrencode -t ANSIUTF8 "$IPV4_URL"
+        echo "--------------------------------------------"
+    else
+        red "Hysteria directory does not exist. Please install Hysteria first."
+    fi
+
+    read -p "Press Enter to continue..."
+}
+
+# --- 4. Delete Hysteria ---
+delete_hysteria_v2() {
+    clear
+    echo "Deleting Hysteria v2 Proxy & Firewall rules..."
+    sleep 2
+    
+    # Remove NAT routing rules
+    iptables -t nat -D PREROUTING -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || true
+    ip6tables -t nat -D PREROUTING -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || true
+    netfilter-persistent save >/dev/null 2>&1 || true
+
+    rm -rf /root/hy2 /home/*/hy2 2>/dev/null
+    systemctl stop hy2 2>/dev/null
+    systemctl disable hy2 2>/dev/null
+    rm -f /etc/systemd/system/hy2.service
+    systemctl daemon-reload
+    
+    red "Hysteria V2 has been completely removed."
+    read -p "Press Enter to continue..."
+}
+
+# --- Main Menu Loop ---
+while true; do
+    clear
+    echo "**********************************************"
+    yellow " Guruz Hysteria V2 Menu (Hopping + Salamander)"
+    echo "**********************************************"
+    green "1. Install/Update"
+    echo
+    green "2. Change Parameters"
+    echo
+    green "3. Show Configs & URI Link"
+    echo
+    green "4. Delete"
+    echo
+    red "0. Exit"
+    echo "**********************************************"
+    
+    readp "Enter your choice: " hysteria_v2_choice
+
+    case "$hysteria_v2_choice" in
+        1)
+            run_hysteria_v2_setup
+            show_hy2_configs
+            ;;
+        2)
+            change_hy2_parameters
+            show_hy2_configs
+            ;;
+        3)
+            show_hy2_configs
+            ;;
+        4)
+            delete_hysteria_v2
+            ;;
+        0)
+            echo "Exiting..."
+            exit 0
+            ;;
+        *)
+            echo
+            red "Invalid choice. Please select a valid option!"
+            sleep 1
+            ;;
+    esac
+done
