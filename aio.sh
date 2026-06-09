@@ -879,7 +879,14 @@ export DEBIAN_FRONTEND=noninteractive
 echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6
 echo "nameserver DNS1" > /etc/resolv.conf; echo "nameserver DNS2" >> /etc/resolv.conf
 mkdir -p /var/run/sslh; touch /var/run/sslh/sslh.pid; chmod 777 /var/run/sslh/sslh.pid
+
+# Standard INPUT rule for Port 53
 iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53 -j ACCEPT
+
+# 🚨 NEW FIX: VIP Pass for Port 53 (Prevents UDP Custom from swallowing SlowDNS traffic)
+iptables -t nat -C PREROUTING -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -t nat -I PREROUTING 1 -p udp --dport 53 -j ACCEPT
+
+# Hysteria NAT Routing
 IFACE=$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)
 iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
 deekayz
