@@ -20,7 +20,7 @@ esac
 
 echo "============================================================"
 echo "              Guruz GH SSH Script Installer"
-echo "        (Multi-Protocol Edition: SSH/Xray/Hysteria/ZiVPN)"
+echo "        (Multi-Protocol Edition: SSH/Xray/Hysteria/ZiVPN/UDP Custom)"
 echo "============================================================"
 echo ""
 echo "Supported Operating Systems:"
@@ -358,20 +358,55 @@ loc=/etc/socksproxy; mkdir -p $loc; apt-get install -y nodejs
 cat <<EOF > $loc/proxy.js
 const net = require('net');
 process.on('uncaughtException', (err) => { console.error('Unhandled Exception:', err); });
-const TARGET_HOST = '127.0.0.1'; const TARGET_PORT = $Dropbear_Port1;
+
+const TARGET_HOST = '127.0.0.1'; 
+const TARGET_PORT = $Dropbear_Port1;
 const LISTEN_PORT = parseInt(process.argv[2]);
 if (!LISTEN_PORT) { process.exit(1); }
+
 const handleConnection = (clientSocket) => {
-    clientSocket.once('data', (data) => {
-        const targetSocket = net.connect(TARGET_PORT, TARGET_HOST, () => {
-            clientSocket.write('HTTP/1.1 101 Switching Protocols\r\n\r\n');
-            clientSocket.pipe(targetSocket); targetSocket.pipe(clientSocket);
-        });
-        targetSocket.on('error', () => clientSocket.destroy());
-        targetSocket.on('close', () => clientSocket.destroy());
-    });
-    clientSocket.on('error', () => {}); clientSocket.on('close', () => {});
+    let isSshBridged = false;
+    let targetSocket = null;
+    let buffer = '';
+
+    const onClientData = (data) => {
+        if (!isSshBridged) {
+            buffer += data.toString('utf8');
+            
+            // Wait strictly for the actual SSH protocol to begin
+            if (buffer.includes('SSH-')) {
+                isSshBridged = true;
+                if (targetSocket) {
+                    // Extract ONLY the clean SSH handshake and drop all preceding HTTP junk
+                    const sshStartIndex = buffer.indexOf('SSH-');
+                    const sshData = buffer.substring(sshStartIndex);
+                    targetSocket.write(sshData);
+                    clientSocket.pipe(targetSocket);
+                }
+                clientSocket.removeListener('data', onClientData);
+            } 
+            // First HTTP packet: connect to Dropbear & send 101 Upgrade
+            else if (!targetSocket) {
+                targetSocket = net.connect(TARGET_PORT, TARGET_HOST, () => {
+                    clientSocket.write(
+                        'HTTP/1.1 101 Switching Protocols\r\n' +
+                        'Upgrade: websocket\r\n' +
+                        'Connection: Upgrade\r\n\r\n'
+                    );
+                    targetSocket.pipe(clientSocket);
+                });
+                targetSocket.on('error', () => clientSocket.destroy());
+                targetSocket.on('close', () => clientSocket.destroy());
+            }
+            // Any trailing HTTP packets (like extra UNLOCK commands) are completely swallowed!
+        }
+    };
+
+    clientSocket.on('data', onClientData);
+    clientSocket.on('error', () => {});
+    clientSocket.on('close', () => {});
 };
+
 const server = net.createServer(handleConnection);
 server.listen(LISTEN_PORT, '0.0.0.0', () => { console.log(\`WS Proxy active on isolated port \${LISTEN_PORT}\`); });
 EOF
@@ -1472,7 +1507,7 @@ create_user() {
   echo -e "  SSL/WS     : 443"
   echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086, 25"
   echo -e "  SlowDNS    : 53"
-  echo -e "  UDP Custom : 36717"
+  echo -e "  UDP Custom : 1-65535"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
   echo -e "  ${BOLD}Payload HTTP     :${NC}"
   echo -e "  ${YELLOW}GET / HTTP/1.1[crlf]Host: ${DOMAIN}[crlf]Connection: upgrade[crlf]Upgrade: websocket[crlf][crlf]${NC}"
@@ -1797,7 +1832,7 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086, 25" "BadVPN:" "7300"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "UDPCustom:" "36717" "ZiVPN:" "6000-19999"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "UDPCustom:" "1-65535" "ZiVPN:" "6000-19999"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   printf "  ${WHITE}%-10s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-10s${NC} ${YELLOW}%-10s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM Used:" "$ram" "CPU Used:" "$cpu" "Buffer:" "$buf"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
