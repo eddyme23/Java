@@ -808,9 +808,6 @@ cat > /etc/hysteria/config.json <<EOF
       "listen_port": $HYST_PORT,
       "up_mbps": 1000,
       "down_mbps": 1000,
-      "stream_receive_window": "8 MB",
-      "connection_receive_window": "20 MB",
-      "disable_path_mtu_discovery": false,
       "obfs": "$OBFS",
       "users": [ { "auth_str": "$PASSWORD" } ],
       "tls": { "enabled": true, "certificate_path": "/etc/hysteria/hysteria.crt", "key_path": "/etc/hysteria/hysteria.key" }
