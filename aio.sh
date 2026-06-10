@@ -697,7 +697,7 @@ WantedBy=multi-user.target
 END
 systemctl daemon-reload; systemctl enable server-sldns; systemctl restart server-sldns
 
-# === HYSTERIA v1 (Sing-box v1.12.22) & CLOUDFLARE WARP ===
+# === HYSTERIA v1 (Sing-box v1.13.13) & CLOUDFLARE WARP ===
 curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
 apt-get update && apt-get install -y cloudflare-warp
@@ -710,7 +710,8 @@ warp-cli --accept-tos proxy port 40000
 warp-cli --accept-tos connect
 sleep 2
 
-wget -qO /tmp/sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v1.12.22/sing-box_1.12.22_linux_amd64.deb"
+# Upgraded to the stable v1.13.13 core
+wget -qO /tmp/sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v1.13.13/sing-box_1.13.13_linux_amd64.deb"
 dpkg -i /tmp/sing-box.deb
 apt-mark hold sing-box
 rm -f /tmp/sing-box.deb
@@ -807,9 +808,9 @@ cat > /etc/hysteria/config.json <<EOF
       "listen_port": $HYST_PORT,
       "up_mbps": 1000,
       "down_mbps": 1000,
-      "recv_window_conn": 8388608,
-      "recv_window": 20971520,
-      "disable_mtu_discovery": false,
+      "stream_receive_window": "8 MB",
+      "connection_receive_window": "20 MB",
+      "disable_path_mtu_discovery": false,
       "obfs": "$OBFS",
       "users": [ { "auth_str": "$PASSWORD" } ],
       "tls": { "enabled": true, "certificate_path": "/etc/hysteria/hysteria.crt", "key_path": "/etc/hysteria/hysteria.key" }
@@ -822,6 +823,12 @@ cat > /etc/hysteria/config.json <<EOF
   ],
   "route": {
     "rules": [
+      {
+        "inbound": "hy1-inbound",
+        "network": "udp",
+        "domain_suffix": [ "doubleclick.net", "googlesyndication.com", "googleadservices.com", "admob.com","googleapis.com","google-analytics.com", "app-measurement.com", "adservice.google.com", "g.doubleclick.net", "google.com", "pagead2.googlesyndication.com", "tpc.googlesyndication.com", "googlevideo.com", "gvt1.com", "gvt2.com", "gvt3.com", "gstatic.com", "googleusercontent.com", "ggpht.com", "play.google.com", "firebaseio.com", "firebase.googleapis.com", "crashlytics.com", "fundingchoicesmessages.google.com", "imasdk.googleapis.com", "googleanalytics.com", "analytics.google.com", "fcm.googleapis.com", "mtalk.google.com", "firebaseinstallations.googleapis.com", "firebaselogging.googleapis.com", "firebaselogging-pa.googleapis.com", "firebaseremoteconfig.googleapis.com", "googleadapis.com","app-measurement.com", "accounts.google.com", "play.googleapis.com", "android.apis.google.com", "adsense.com", "1e100.net" ],
+        "outbound": "block"
+      },
       {
         "inbound": "hy1-inbound",
         "domain_suffix": [ "doubleclick.net", "googlesyndication.com", "googleadservices.com", "admob.com","googleapis.com","google-analytics.com", "app-measurement.com", "adservice.google.com", "g.doubleclick.net", "google.com", "pagead2.googlesyndication.com", "tpc.googlesyndication.com", "googlevideo.com", "gvt1.com", "gvt2.com", "gvt3.com", "gstatic.com", "googleusercontent.com", "ggpht.com", "play.google.com", "firebaseio.com", "firebase.googleapis.com", "crashlytics.com", "fundingchoicesmessages.google.com", "imasdk.googleapis.com", "googleanalytics.com", "analytics.google.com", "fcm.googleapis.com", "mtalk.google.com", "firebaseinstallations.googleapis.com", "firebaselogging.googleapis.com", "firebaselogging-pa.googleapis.com", "firebaseremoteconfig.googleapis.com", "googleadapis.com","app-measurement.com", "accounts.google.com", "play.googleapis.com", "android.apis.google.com", "adsense.com", "1e100.net" ],
