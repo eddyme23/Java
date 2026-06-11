@@ -516,6 +516,23 @@ cat <<EOF > /etc/xray/config.json
         "tlsSettings": { "alpn": ["h3", "h2", "http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] }
       }
     },
+    {
+      "tag": "trojan-tcp-tls",
+      "port": 20443,
+      "protocol": "trojan",
+      "settings": { "clients": [] },
+      "streamSettings": {
+        "network": "tcp", "security": "tls",
+        "tlsSettings": { "alpn": ["h2", "http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] }
+      }
+    },
+    {
+      "tag": "trojan-tcp-ntls",
+      "port": 20080,
+      "protocol": "trojan",
+      "settings": { "clients": [] },
+      "streamSettings": { "network": "tcp", "security": "none" }
+    },
     { "tag": "vmess-ws", "listen": "127.0.0.1", "port": 10001, "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess-ws" } } },
     { "tag": "trojan-ws", "listen": "127.0.0.1", "port": 10002, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan-ws" } } },
     { "tag": "vless-ws", "listen": "127.0.0.1", "port": 10003, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless-ws" } } },
@@ -634,7 +651,7 @@ systemctl restart "$NGINX_SERVICE"
 rm -rf /etc/squid/squid.con*
 cat <<'mySquid' > /etc/squid/squid.conf
 acl server dst IP-ADDRESS/32 localhost
-acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 36712 36717 5667 8443
+acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 36712 36717 5667 8443 20443 20080
 http_port Squid_Port1
 http_port Squid_Port2
 http_access allow server
@@ -671,7 +688,7 @@ if check_port SSLHPORT && systemctl is-active --quiet sslh; then clear_fail sslh
 if check_port SQUIDPORT1 && check_port SQUIDPORT2 && systemctl is-active --quiet squid; then clear_fail squid; else restart_after_3_fails squid squid "SQUIDPORT1,SQUIDPORT2"; fi
 if check_port NGINXPORT && systemctl is-active --quiet nginx; then clear_fail nginx; else restart_after_3_fails nginx nginx "NGINXPORT"; fi
 for port in 10080 25 2082 2086; do if check_port $port && systemctl is-active --quiet ws-proxy@$port; then clear_fail ws-proxy-$port; else restart_after_3_fails ws-proxy-$port ws-proxy@$port "$port"; fi; done
-if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "443, 80, 8443"; fi
+if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "443, 80, 8443, 20443"; fi
 if systemctl is-active --quiet hysteria-server; then clear_fail hysteria-server; else restart_after_3_fails hysteria-server hysteria-server "UDP"; fi
 if systemctl is-active --quiet udp-custom; then clear_fail udp-custom; else restart_after_3_fails udp-custom udp-custom "UDP"; fi
 if systemctl is-active --quiet zivpn; then clear_fail zivpn; else restart_after_3_fails zivpn zivpn "UDP"; fi
@@ -1359,7 +1376,7 @@ add_xray() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   echo -e " [1] VLESS (All Transports + REALITY + QUIC)"
   echo -e " [2] VMESS (WS / gRPC)"
-  echo -e " [3] TROJAN (WS / gRPC / HTTPUpgrade / xHTTP)"
+  echo -e " [3] TROJAN (All Transports + Dedicated TCP)"
   echo -e " [4] ALL-IN-ONE (Every Protocol & Transport)"
   read -rp " Select Protocol: " prot
   read -rp " Username: " user
@@ -1434,12 +1451,18 @@ add_xray() {
     echo -e "gRPC: trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&host=${DOMAIN}&sni=${DOMAIN}#${user}-gRPC"
     echo -e "HTTPUpgrade: trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}#${user}-HU"
     echo -e "xHTTP: trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}#${user}-xHTTP"
+    
+    echo -e "\n${YELLOW}=== TROJAN TLS DEDICATED (TCP 20443) ===${NC}"
+    echo -e "TCP: trojan://${pass}@${DOMAIN}:20443?security=tls&headerType=none&type=tcp&sni=${DOMAIN}#${user}-TCP"
 
     echo -e "\n${YELLOW}=== TROJAN NTLS (80) [NOT RECOMMENDED] ===${NC}"
     echo -e "WS: trojan://${pass}@${DOMAIN}:80?type=ws&security=none&path=%2Ftrojan-ws&host=${DOMAIN}#${user}-WS-NTLS"
     echo -e "gRPC: trojan://${pass}@${DOMAIN}:80?type=grpc&security=none&serviceName=trojan-grpc&host=${DOMAIN}#${user}-gRPC-NTLS"
     echo -e "HTTPUpgrade: trojan://${pass}@${DOMAIN}:80?type=httpupgrade&security=none&path=%2Ftrojan-hu&host=${DOMAIN}#${user}-HU-NTLS"
     echo -e "xHTTP: trojan://${pass}@${DOMAIN}:80?type=xhttp&security=none&path=%2Ftrojan-xhttp&host=${DOMAIN}#${user}-xHTTP-NTLS"
+    
+    echo -e "\n${YELLOW}=== TROJAN NTLS DEDICATED (TCP 20080) [EXTREMELY RISKY] ===${NC}"
+    echo -e "TCP: trojan://${pass}@${DOMAIN}:20080?security=none&headerType=none&type=tcp#${user}-TCP-NTLS"
   fi
 
   echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
@@ -1526,7 +1549,7 @@ show_xray() {
   if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
     echo -e "${YELLOW}=== TROJAN LINKS FOR $user ===${NC}"
-    echo -e "TROJAN TLS WS: trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}#${user}-WS\n"
+    echo -e "TROJAN TLS TCP: trojan://${pass}@${DOMAIN}:20443?security=tls&headerType=none&type=tcp&sni=${DOMAIN}#${user}-TCP\n"
     found=1
   fi
   if [ "$found" -eq 0 ]; then echo -e "${RED}User not found in any protocol.${NC}"; fi
@@ -1909,7 +1932,7 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SSL:" "443" "SSL/PYTHON:" "443"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "80, 8080, 8880" "Squid:" "3128, 8000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086, 25" "BadVPN:" "7300"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443, 8443" "XRAY NTLS:" "80, 8080, 8880"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443, 8443, 20443" "XRAY NTLS:" "80, 20080"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "UDPCustom:" "1-65535" "ZiVPN:" "6000-19999"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
