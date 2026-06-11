@@ -457,7 +457,7 @@ echo "REALITY_SHORTID=$REALITY_SHORTID" >> /etc/xray/reality.env
 
 cat <<EOF > /etc/xray/config.json
 {
-  "log": { "access": "/var/log/xray/access.log", "error": "/var/log/xray/error.log", "loglevel": "warning" },
+  "log": { "access": "none", "error": "/var/log/xray/error.log", "loglevel": "warning" },
   "inbounds": [
     {
       "tag": "vless-tcp-tls",
@@ -713,7 +713,7 @@ sed -i "s|SSHPORT2|$SSH_Port2|g" /etc/deekayvpn/service_checker.sh
 echo "*/3 * * * * root /bin/bash /etc/deekayvpn/service_checker.sh >/dev/null 2>&1" > /etc/cron.d/service-checker
 rm -f /etc/logrotate.d/rsyslog
 cat <<'logrotate' > /etc/logrotate.d/rsyslog
-/var/log/syslog /var/log/kern.log /var/log/auth.log /var/log/xray/access.log /var/log/xray/error.log { rotate 7; daily; missingok; notifempty; compress; delaycompress; sharedscripts; postrotate; /usr/lib/rsyslog/rsyslog-rotate; endscript; }
+/var/log/syslog /var/log/kern.log /var/log/auth.log /var/log/xray/error.log { rotate 7; daily; maxsize 50M; missingok; notifempty; compress; delaycompress; sharedscripts; postrotate; /usr/lib/rsyslog/rsyslog-rotate; endscript; }
 logrotate
 chown root:root /var/log; chmod 755 /var/log; chown syslog:adm /var/log/syslog; chmod 640 /var/log/syslog
 echo "*/5 * * * * root /usr/sbin/logrotate -v -f /etc/logrotate.d/rsyslog >/dev/null 2>&1" > /etc/cron.d/logrotate
@@ -754,6 +754,10 @@ net.netfilter.nf_conntrack_udp_timeout = 60
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 SYSCTL
+# Systemd Journal Log Cap
+sed -i 's/.*SystemMaxUse.*/SystemMaxUse=200M/' /etc/systemd/journald.conf
+grep -q "^SystemMaxUse=200M" /etc/systemd/journald.conf || echo "SystemMaxUse=200M" >> /etc/systemd/journald.conf
+systemctl restart systemd-journald
 sysctl --system || true
 mkdir -p /etc/security/limits.d
 cat <<'LIMITS' > /etc/security/limits.d/99-freenet.conf
