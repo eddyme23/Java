@@ -444,14 +444,16 @@ chmod +x /usr/local/bin/xray
 rm -rf /tmp/xray*
 touch /etc/xray/vless.txt /etc/xray/vmess.txt /etc/xray/trojan.txt
 
-# Generate REALITY Keys
-if [ ! -f /etc/xray/reality.env ]; then
-  R_KEYS=$(/usr/local/bin/xray x25519)
-  echo "REALITY_PRIVATE=$(echo "$R_KEYS" | awk '/Private key:/ {print $3}')" > /etc/xray/reality.env
-  echo "REALITY_PUBLIC=$(echo "$R_KEYS" | awk '/Public key:/ {print $3}')" >> /etc/xray/reality.env
-  echo "REALITY_SHORTID=$(openssl rand -hex 8)" >> /etc/xray/reality.env
-fi
-source /etc/xray/reality.env
+# Generate REALITY Keys Safely
+rm -f /etc/xray/reality.env 
+R_KEYS=$(/usr/local/bin/xray x25519)
+REALITY_PRIVATE=$(echo "$R_KEYS" | awk '/Private key:/ {print $3}')
+REALITY_PUBLIC=$(echo "$R_KEYS" | awk '/Public key:/ {print $3}')
+REALITY_SHORTID=$(openssl rand -hex 8)
+
+echo "REALITY_PRIVATE=$REALITY_PRIVATE" > /etc/xray/reality.env
+echo "REALITY_PUBLIC=$REALITY_PUBLIC" >> /etc/xray/reality.env
+echo "REALITY_SHORTID=$REALITY_SHORTID" >> /etc/xray/reality.env
 
 cat <<EOF > /etc/xray/config.json
 {
