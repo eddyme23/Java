@@ -713,7 +713,19 @@ sed -i "s|SSHPORT2|$SSH_Port2|g" /etc/deekayvpn/service_checker.sh
 echo "*/3 * * * * root /bin/bash /etc/deekayvpn/service_checker.sh >/dev/null 2>&1" > /etc/cron.d/service-checker
 rm -f /etc/logrotate.d/rsyslog
 cat <<'logrotate' > /etc/logrotate.d/rsyslog
-/var/log/syslog /var/log/kern.log /var/log/auth.log /var/log/xray/error.log { rotate 7; daily; maxsize 50M; missingok; notifempty; compress; delaycompress; sharedscripts; postrotate; /usr/lib/rsyslog/rsyslog-rotate; endscript; }
+/var/log/syslog /var/log/kern.log /var/log/auth.log /var/log/xray/error.log { 
+    rotate 7; 
+    daily; 
+    maxsize 50M; 
+    missingok; 
+    notifempty; 
+    compress; 
+    delaycompress; 
+    sharedscripts; 
+    postrotate; 
+        /bin/systemctl kill -s HUP rsyslog.service >/dev/null 2>&1 || true; 
+    endscript; 
+}
 logrotate
 chown root:root /var/log; chmod 755 /var/log; chown syslog:adm /var/log/syslog; chmod 640 /var/log/syslog
 echo "*/5 * * * * root /usr/sbin/logrotate -v -f /etc/logrotate.d/rsyslog >/dev/null 2>&1" > /etc/cron.d/logrotate
@@ -802,6 +814,16 @@ warp-cli --accept-tos mode proxy
 warp-cli --accept-tos proxy port 40000
 warp-cli --accept-tos connect
 sleep 2
+
+# Silence noisy warp-svc telemetry
+echo "Applying log limits to warp-svc..."
+mkdir -p /etc/systemd/system/warp-svc.service.d
+cat <<EOF > /etc/systemd/system/warp-svc.service.d/logging.conf
+[Service]
+LogLevelMax=warning
+EOF
+systemctl daemon-reload
+systemctl restart warp-svc
 
 # Upgraded to the stable v1.13.13 core
 wget -qO /tmp/sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v1.13.13/sing-box_1.13.13_linux_amd64.deb"
@@ -897,7 +919,7 @@ cat > /etc/hysteria/config.json <<EOF
     {
       "type": "hysteria",
       "tag": "hy1-inbound",
-      "listen": "::",
+      "listen": "0.0.0.0",
       "listen_port": $HYST_PORT,
       "up_mbps": 1000,
       "down_mbps": 1000,
