@@ -713,7 +713,7 @@ sed -i "s|SSHPORT2|$SSH_Port2|g" /etc/deekayvpn/service_checker.sh
 echo "*/3 * * * * root /bin/bash /etc/deekayvpn/service_checker.sh >/dev/null 2>&1" > /etc/cron.d/service-checker
 rm -f /etc/logrotate.d/rsyslog
 cat <<'logrotate' > /etc/logrotate.d/rsyslog
-/var/log/syslog /var/log/kern.log /var/log/auth.log /var/log/xray/error.log { 
+/var/log/syslog /var/log/kern.log /var/log/auth.log /var/log/xray/error.log /var/log/nginx/*.log { 
     rotate 7; 
     daily; 
     maxsize 50M; 
@@ -724,6 +724,7 @@ cat <<'logrotate' > /etc/logrotate.d/rsyslog
     sharedscripts; 
     postrotate; 
         /bin/systemctl kill -s HUP rsyslog.service >/dev/null 2>&1 || true; 
+        /bin/systemctl kill -s USR1 nginx.service >/dev/null 2>&1 || true;
     endscript; 
 }
 logrotate
@@ -1039,7 +1040,7 @@ Description=badvpn tun2socks service
 After=network.target
 [Service]
 Type=simple
-ExecStart=/usr/bin/badvpn-udpgw --listen-addr 127.0.0.1:7300 --max-clients 1000 --max-connections-for-client 10
+ExecStart=/usr/bin/badvpn-udpgw --loglevel none --listen-addr 127.0.0.1:7300 --max-clients 1000 --max-connections-for-client 10
 [Install]
 WantedBy=multi-user.target
 deekayb
@@ -1106,7 +1107,7 @@ WorkingDirectory=/etc/zivpn
 ExecStart=/usr/local/bin/zivpn server -c /etc/zivpn/config.json
 Restart=always
 RestartSec=3
-Environment=ZIVPN_LOG_LEVEL=info
+Environment=ZIVPN_LOG_LEVEL=warning
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=true
