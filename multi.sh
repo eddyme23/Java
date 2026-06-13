@@ -444,11 +444,11 @@ chmod +x /usr/local/bin/xray
 rm -rf /tmp/xray*
 touch /etc/xray/vless.txt /etc/xray/vmess.txt /etc/xray/trojan.txt
 
-# Generate REALITY Keys Safely
+# Generate REALITY Keys Safely (Bulletproof Extraction)
 rm -f /etc/xray/reality.env 
-R_KEYS=$(/usr/local/bin/xray x25519)
-REALITY_PRIVATE=$(echo "$R_KEYS" | awk '/Private key:/ {print $3}')
-REALITY_PUBLIC=$(echo "$R_KEYS" | awk '/Public key:/ {print $3}')
+R_KEYS=$(/usr/local/bin/xray x25519 2>&1)
+REALITY_PRIVATE=$(echo "$R_KEYS" | grep -i "Private" | awk -F ':' '{print $2}' | tr -d ' ' | tr -d '\r')
+REALITY_PUBLIC=$(echo "$R_KEYS" | grep -i "Public" | awk -F ':' '{print $2}' | tr -d ' ' | tr -d '\r')
 REALITY_SHORTID=$(openssl rand -hex 8)
 
 echo "REALITY_PRIVATE=$REALITY_PRIVATE" > /etc/xray/reality.env
@@ -505,17 +505,6 @@ cat <<EOF > /etc/xray/config.json
           "show": false, "dest": "www.microsoft.com:443", "xver": 0, "serverNames": ["www.microsoft.com", "microsoft.com"],
           "privateKey": "${REALITY_PRIVATE}", "shortIds": ["${REALITY_SHORTID}"]
         }
-      }
-    },
-    {
-      "tag": "vless-quic",
-      "port": 443,
-      "protocol": "vless",
-      "settings": { "clients": [], "decryption": "none" },
-      "streamSettings": {
-        "network": "quic", "security": "tls",
-        "quicSettings": { "security": "none", "key": "", "header": { "type": "none" } },
-        "tlsSettings": { "alpn": ["h3", "h2", "http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] }
       }
     },
     { "tag": "vmess-ws", "listen": "127.0.0.1", "port": 10001, "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess-ws" } } },
@@ -1408,7 +1397,7 @@ add_xray() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   echo -e "                   ${BOLD}CREATE XRAY ACCOUNT${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e " [1] VLESS (All Transports + REALITY + QUIC)"
+  echo -e " [1] VLESS (All Transports + REALITY)"
   echo -e " [2] VMESS (WS / gRPC)"
   echo -e " [3] TROJAN (All Transports)"
   echo -e " [4] ALL-IN-ONE (Every Protocol & Transport)"
@@ -1454,9 +1443,6 @@ add_xray() {
     echo -e "TCP: vless://${uuid}@${DOMAIN}:8443?type=tcp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome#${user}-REALITY-TCP"
     echo -e "gRPC: vless://${uuid}@${DOMAIN}:8443?type=grpc&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome&serviceName=vless-grpc-r#${user}-REALITY-gRPC"
     echo -e "xHTTP: vless://${uuid}@${DOMAIN}:8443?type=xhttp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome&path=%2Fvless-xhttp-r#${user}-REALITY-xHTTP"
-
-    echo -e "\n${YELLOW}=== VLESS QUIC (443 UDP) ===${NC}"
-    echo -e "QUIC: vless://${uuid}@${DOMAIN}:443?type=quic&security=tls&headerType=none&host=${DOMAIN}&sni=${DOMAIN}#${user}-QUIC"
   fi
   
   if [ "$prot" == "2" ] || [ "$prot" == "4" ]; then
@@ -1555,8 +1541,7 @@ show_xray() {
     echo -e "\n${YELLOW}=== VLESS LINKS FOR $user ===${NC}"
     echo -e "VLESS TLS TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&headerType=none&host=${DOMAIN}&sni=${DOMAIN}#${user}-TCP"
     echo -e "VLESS NTLS TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&headerType=none&host=${DOMAIN}#${user}-TCP-NTLS"
-    echo -e "VLESS REALITY: vless://${uuid}@${DOMAIN}:8443?type=tcp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome#${user}-REALITY-TCP"
-    echo -e "VLESS QUIC: vless://${uuid}@${DOMAIN}:443?type=quic&security=tls&headerType=none&host=${DOMAIN}&sni=${DOMAIN}#${user}-QUIC\n"
+    echo -e "VLESS REALITY: vless://${uuid}@${DOMAIN}:8443?type=tcp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome#${user}-REALITY-TCP\n"
     found=1
   fi
   if grep -qw "^$user" /etc/xray/vmess.txt; then
