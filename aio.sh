@@ -281,6 +281,7 @@ ClientAliveInterval 300
 ClientAliveCountMax 2
 UseDNS no
 Banner /etc/zorro-luffy
+LogLevel QUIET
 AcceptEnv LANG LC_*
 Subsystem sftp SFTP_SUBSYSTEM
 MySSHConfig
@@ -679,10 +680,21 @@ net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 SYSCTL
 # Systemd Journal Log Cap
-sed -i 's/.*SystemMaxUse.*/SystemMaxUse=200M/' /etc/systemd/journald.conf
-grep -q "^SystemMaxUse=200M" /etc/systemd/journald.conf || echo "SystemMaxUse=200M" >> /etc/systemd/journald.conf
+# Aggressive Systemd Journal Log Cap (RAM only to prevent socket freeze)
+sed -i 's/.*SystemMaxUse.*/SystemMaxUse=10M/' /etc/systemd/journald.conf
+sed -i 's/.*Storage.*/Storage=volatile/' /etc/systemd/journald.conf
+grep -q "^SystemMaxUse=10M" /etc/systemd/journald.conf || echo "SystemMaxUse=10M" >> /etc/systemd/journald.conf
+grep -q "^Storage=volatile" /etc/systemd/journald.conf || echo "Storage=volatile" >> /etc/systemd/journald.conf
 systemctl restart systemd-journald
 sysctl --system || true
+# Prevent Rsyslog from writing heavy VPN logs to disk
+cat <<'EOF' > /etc/rsyslog.d/99-vpn-discard.conf
+:programname, isequal, "dropbear" stop
+:programname, isequal, "sslh" stop
+:programname, isequal, "sshd" stop
+:programname, isequal, "stunnel" stop
+EOF
+systemctl restart rsyslog
 mkdir -p /etc/security/limits.d
 cat <<'LIMITS' > /etc/security/limits.d/99-freenet.conf
 * soft nofile 1048576
@@ -1018,7 +1030,7 @@ WorkingDirectory=/etc/zivpn
 ExecStart=/usr/local/bin/zivpn server -c /etc/zivpn/config.json
 Restart=always
 RestartSec=3
-Environment=ZIVPN_LOG_LEVEL=info
+Environment=ZIVPN_LOG_LEVEL=error
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=true
