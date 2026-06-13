@@ -954,7 +954,7 @@ Wants=network-online.target
 Before=hysteria-server.service
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT)'
+ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT)'
 ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport $HYST_PORT -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport $HYST_PORT -j ACCEPT'
 RemainAfterExit=yes
 [Install]
@@ -979,7 +979,7 @@ iptables -t nat -C PREROUTING -p udp --dport 53 -j ACCEPT 2>/dev/null || iptable
 
 # Hysteria NAT Routing
 IFACE=$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)
-iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
+iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
 deekayz
 
 sed -i "s|MyTimeZone|$MyVPS_Time|g" /etc/deekaystartup
@@ -1118,7 +1118,7 @@ Wants=network-online.target
 Before=zivpn.service
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 6000:19999 -j DNAT --to-destination :5667 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 6000:19999 -j DNAT --to-destination :5667)'
+ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 6000:19999 -j DNAT --to-destination :5667 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "\$IFACE" -p udp --dport 6000:19999 -j DNAT --to-destination :5667)'
 ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport 5667 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 5667 -j ACCEPT'
 RemainAfterExit=yes
 [Install]
@@ -1397,10 +1397,10 @@ add_xray() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   echo -e "                   ${BOLD}CREATE XRAY ACCOUNT${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e " [1] VLESS (All Transports + REALITY)"
-  echo -e " [2] VMESS (WS / gRPC)"
-  echo -e " [3] TROJAN (All Transports)"
-  echo -e " [4] ALL-IN-ONE (Every Protocol & Transport)"
+  echo -e " [1] VLESS (TLS & NTLS & REALITY)"
+  echo -e " [2] VMESS (TLS & NTLS)"
+  echo -e " [3] TROJAN (TLS)"
+  echo -e " [4] ALL-IN-ONE (VLESS + VMESS + TROJAN)"
   read -rp " Select Protocol: " prot
   read -rp " Username: " user
   
@@ -1422,58 +1422,79 @@ add_xray() {
   source /etc/xray/reality.env 2>/dev/null
   
   if [ "$prot" == "1" ] || [ "$prot" == "4" ]; then
+    # Safely inject into ALL VLESS inbounds dynamically without relying on array numbers
     jq "(.inbounds[] | select(.protocol == \"vless\").settings.clients) += [{\"id\": \"$uuid\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     echo "$user $uuid $exp" >> /etc/xray/vless.txt
     
-    echo -e "\n${YELLOW}=== VLESS TLS (443) ===${NC}"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&headerType=none&host=${DOMAIN}&sni=${DOMAIN}#${user}-TCP"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless-ws&host=${DOMAIN}&sni=${DOMAIN}#${user}-WS"
-    echo -e "gRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=vless-grpc&host=${DOMAIN}&sni=${DOMAIN}#${user}-gRPC"
-    echo -e "HTTPUpgrade: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fvless-hu&host=${DOMAIN}&sni=${DOMAIN}#${user}-HU"
-    echo -e "xHTTP: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}&sni=${DOMAIN}#${user}-xHTTP"
-    
-    echo -e "\n${YELLOW}=== VLESS NTLS (80) ===${NC}"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&headerType=none&host=${DOMAIN}#${user}-TCP-NTLS"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless-ws&host=${DOMAIN}#${user}-WS-NTLS"
-    echo -e "gRPC: vless://${uuid}@${DOMAIN}:80?type=grpc&security=none&encryption=none&serviceName=vless-grpc&host=${DOMAIN}#${user}-gRPC-NTLS"
-    echo -e "HTTPUpgrade: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fvless-hu&host=${DOMAIN}#${user}-HU-NTLS"
-    echo -e "xHTTP: vless://${uuid}@${DOMAIN}:80?type=xhttp&security=none&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}#${user}-xHTTP-NTLS"
-
-    echo -e "\n${YELLOW}=== VLESS REALITY (8443) ===${NC}"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:8443?type=tcp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome#${user}-REALITY-TCP"
-    echo -e "gRPC: vless://${uuid}@${DOMAIN}:8443?type=grpc&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome&serviceName=vless-grpc-r#${user}-REALITY-gRPC"
-    echo -e "xHTTP: vless://${uuid}@${DOMAIN}:8443?type=xhttp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome&path=%2Fvless-xhttp-r#${user}-REALITY-xHTTP"
+    if [ "$prot" == "1" ]; then
+        clear
+        echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "                   ${BOLD}VLESS ACCOUNT CREATED${NC}"
+        echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "Username : $user\nExpiry   : $exp"
+        echo -e "\n${YELLOW}TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+        echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless-ws&host=${DOMAIN}#${user}"
+        echo -e "\n${YELLOW}REALITY (8443):${NC}\nvless://${uuid}@${DOMAIN}:8443?type=tcp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome#${user}-REALITY"
+        echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    fi
   fi
   
   if [ "$prot" == "2" ] || [ "$prot" == "4" ]; then
+    # Safely inject into ALL VMESS inbounds dynamically
     jq "(.inbounds[] | select(.protocol == \"vmess\").settings.clients) += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     echo "$user $uuid $exp" >> /etc/xray/vmess.txt
     
-    echo -e "\n${YELLOW}=== VMESS TLS (443) ===${NC}"
-    VMESS_WS="{\"v\":\"2\",\"ps\":\"${user}-WS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
-    echo -e "WS: vmess://$(echo -n "$VMESS_WS" | base64 -w 0)"
-    VMESS_GRPC="{\"v\":\"2\",\"ps\":\"${user}-gRPC\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
-    echo -e "gRPC: vmess://$(echo -n "$VMESS_GRPC" | base64 -w 0)"
-    
-    echo -e "\n${YELLOW}=== VMESS NTLS (80) ===${NC}"
-    VMESS_WS_NTLS="{\"v\":\"2\",\"ps\":\"${user}-WS-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"none\"}"
-    echo -e "WS: vmess://$(echo -n "$VMESS_WS_NTLS" | base64 -w 0)"
-    VMESS_GRPC_NTLS="{\"v\":\"2\",\"ps\":\"${user}-gRPC-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"none\"}"
-    echo -e "gRPC: vmess://$(echo -n "$VMESS_GRPC_NTLS" | base64 -w 0)"
+    if [ "$prot" == "2" ]; then
+        clear
+        echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "                   ${BOLD}VMESS ACCOUNT CREATED${NC}"
+        echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "Username: $user\nExpiry: $exp"
+        VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
+        echo -e "\n${YELLOW}TLS (443):${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
+        VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"none\"}"
+        echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
+        echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    fi
   fi
   
   if [ "$prot" == "3" ] || [ "$prot" == "4" ]; then
+    # Safely inject into ALL TROJAN inbounds dynamically
     jq "(.inbounds[] | select(.protocol == \"trojan\").settings.clients) += [{\"password\": \"$pass\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     echo "$user $pass $exp" >> /etc/xray/trojan.txt
     
-    echo -e "\n${YELLOW}=== TROJAN TLS (443) ===${NC}"
-    echo -e "WS: trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}#${user}-WS"
-    echo -e "gRPC: trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&host=${DOMAIN}&sni=${DOMAIN}#${user}-gRPC"
-    echo -e "HTTPUpgrade: trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}#${user}-HU"
-    echo -e "xHTTP: trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}#${user}-xHTTP"
+    if [ "$prot" == "3" ]; then
+        clear
+        echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "                   ${BOLD}TROJAN ACCOUNT CREATED${NC}"
+        echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "Username: $user\nPassword: $pass\nExpiry: $exp"
+        echo -e "\n${YELLOW}TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+        echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    fi
   fi
 
-  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  if [ "$prot" == "4" ]; then
+    clear
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "               ${BOLD}ALL-IN-ONE ACCOUNT CREATED${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "Username: $user\nExpiry:   $exp"
+    echo -e "${CYAN}--------------------------------------------------------------${NC}"
+    
+    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "\n${YELLOW}[ VLESS NTLS (80) ]${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless-ws&host=${DOMAIN}#${user}"
+    
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
+    echo -e "\n${YELLOW}[ VMESS TLS (443) ]${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
+    
+    VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"none\"}"
+    echo -e "\n${YELLOW}[ VMESS NTLS (80) ]${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)"
+
+    echo -e "\n${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  fi
+
   systemctl restart xray
   pause_return
 }
@@ -1538,25 +1559,22 @@ show_xray() {
   source /etc/xray/reality.env 2>/dev/null
   if grep -qw "^$user" /etc/xray/vless.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
-    echo -e "\n${YELLOW}=== VLESS LINKS FOR $user ===${NC}"
-    echo -e "VLESS TLS TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&headerType=none&host=${DOMAIN}&sni=${DOMAIN}#${user}-TCP"
-    echo -e "VLESS NTLS TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&headerType=none&host=${DOMAIN}#${user}-TCP-NTLS"
-    echo -e "VLESS REALITY: vless://${uuid}@${DOMAIN}:8443?type=tcp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome#${user}-REALITY-TCP\n"
+    echo -e "${YELLOW}VLESS TLS (443):${NC}\nvless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "\n${YELLOW}VLESS NTLS (80):${NC}\nvless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless-ws&host=${DOMAIN}#${user}"
+    echo -e "\n${YELLOW}VLESS REALITY (8443):${NC}\nvless://${uuid}@${DOMAIN}:8443?type=tcp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome#${user}-REALITY\n"
     found=1
   fi
   if grep -qw "^$user" /etc/xray/vmess.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vmess.txt | awk '{print $2}')
-    echo -e "${YELLOW}=== VMESS LINKS FOR $user ===${NC}"
-    VMESS_WS="{\"v\":\"2\",\"ps\":\"${user}-WS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
-    echo -e "VMESS TLS WS: vmess://$(echo -n "$VMESS_WS" | base64 -w 0)"
-    VMESS_WS_NTLS="{\"v\":\"2\",\"ps\":\"${user}-WS-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"none\"}"
-    echo -e "VMESS NTLS WS: vmess://$(echo -n "$VMESS_WS_NTLS" | base64 -w 0)\n"
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
+    echo -e "${YELLOW}VMESS TLS (443):${NC}\nvmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)"
+    VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"none\"}"
+    echo -e "\n${YELLOW}VMESS NTLS (80):${NC}\nvmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)\n"
     found=1
   fi
   if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
-    echo -e "${YELLOW}=== TROJAN LINKS FOR $user ===${NC}"
-    echo -e "TROJAN TLS WS: trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}#${user}-WS\n"
+    echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
     found=1
   fi
   if [ "$found" -eq 0 ]; then echo -e "${RED}User not found in any protocol.${NC}"; fi
@@ -1944,7 +1962,7 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443, 8443" "XRAY NTLS:" "80"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "UDPCustom:" "1-65535" "ZiVPN:" "6000-19999"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SocksIP UDP:" "System Mode" " " " "
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SocksIP UDP:" "1-65535" "XRAY NTLS " "8080, 8880"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   printf "  ${WHITE}%-10s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-10s${NC} ${YELLOW}%-10s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM Used:" "$ram" "CPU Used:" "$cpu" "Buffer:" "$buf"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
