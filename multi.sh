@@ -18,10 +18,10 @@ case "$ID:$VERSION_ID" in
   *) SUPPORT_LEVEL="unsupported" ;;
 esac
 
-echo "============================================================"
-echo "              Guruz GH SSH Script Installer"
-echo "        (Multi-Protocol Edition: SSH/Xray/Hysteria/ZiVPN/UDP Custom)"
-echo "============================================================"
+echo "==============================================================================="
+echo "                        Guruz GH SSH Script Installer"
+echo "        (Multi-Protocol Edition: SSH/Xray/Hysteria-1/ZiVPN/UDP-Custom/SocksIP)"
+echo "==============================================================================="
 echo ""
 echo "Supported Operating Systems:"
 echo ""
@@ -31,7 +31,7 @@ echo "  ✔ Ubuntu 24.04           (Supported)"
 echo "  ✔ Ubuntu 22.04           (Recommended)"
 echo "  ✔ Ubuntu 20.04           (Legacy Support)"
 echo ""
-echo "============================================================"
+echo "==============================================================================="
 sleep 2
 
 if [ "$SUPPORT_LEVEL" = "unsupported" ]; then
@@ -481,9 +481,9 @@ cat <<EOF > /etc/xray/config.json
       "settings": {
         "clients": [], "decryption": "none",
         "fallbacks": [
-          { "path": "/vmess-ws", "dest": 10001 }, { "path": "/trojan-ws", "dest": 10002 }, { "path": "/vless-ws", "dest": 10003 },
-          { "path": "/vless-grpc", "dest": 10011 }, { "path": "/vmess-grpc", "dest": 10012 }, { "path": "/trojan-grpc", "dest": 10013 },
-          { "path": "/vless-hu", "dest": 10021 }, { "path": "/vless-xhttp", "dest": 10031 }, { "path": "/trojan-hu", "dest": 10023 }, { "path": "/trojan-xhttp", "dest": 10033 },
+          { "path": "/vmess-ws", "dest": 10001 }, { "path": "/vless-ws", "dest": 10003 },
+          { "path": "/vless-grpc", "dest": 10011 }, { "path": "/vmess-grpc", "dest": 10012 },
+          { "path": "/vless-hu", "dest": 10021 }, { "path": "/vless-xhttp", "dest": 10031 },
           { "dest": 10080 }
         ]
       },
@@ -517,23 +517,6 @@ cat <<EOF > /etc/xray/config.json
         "quicSettings": { "security": "none", "key": "", "header": { "type": "none" } },
         "tlsSettings": { "alpn": ["h3", "h2", "http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] }
       }
-    },
-    {
-      "tag": "trojan-tcp-tls",
-      "port": 20443,
-      "protocol": "trojan",
-      "settings": { "clients": [] },
-      "streamSettings": {
-        "network": "tcp", "security": "tls",
-        "tlsSettings": { "alpn": ["h2", "http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] }
-      }
-    },
-    {
-      "tag": "trojan-tcp-ntls",
-      "port": 20080,
-      "protocol": "trojan",
-      "settings": { "clients": [] },
-      "streamSettings": { "network": "tcp", "security": "none" }
     },
     { "tag": "vmess-ws", "listen": "127.0.0.1", "port": 10001, "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess-ws" } } },
     { "tag": "trojan-ws", "listen": "127.0.0.1", "port": 10002, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan-ws" } } },
@@ -653,7 +636,7 @@ systemctl restart "$NGINX_SERVICE"
 rm -rf /etc/squid/squid.con*
 cat <<'mySquid' > /etc/squid/squid.conf
 acl server dst IP-ADDRESS/32 localhost
-acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 36712 36717 5667 8443 20443 20080
+acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 36712 36717 5667 8443
 http_port Squid_Port1
 http_port Squid_Port2
 http_access allow server
@@ -690,10 +673,11 @@ if check_port SSLHPORT && systemctl is-active --quiet sslh; then clear_fail sslh
 if check_port SQUIDPORT1 && check_port SQUIDPORT2 && systemctl is-active --quiet squid; then clear_fail squid; else restart_after_3_fails squid squid "SQUIDPORT1,SQUIDPORT2"; fi
 if check_port NGINXPORT && systemctl is-active --quiet nginx; then clear_fail nginx; else restart_after_3_fails nginx nginx "NGINXPORT"; fi
 for port in 10080 25 2082 2086; do if check_port $port && systemctl is-active --quiet ws-proxy@$port; then clear_fail ws-proxy-$port; else restart_after_3_fails ws-proxy-$port ws-proxy@$port "$port"; fi; done
-if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "443, 80, 8443, 20443"; fi
+if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "443, 80, 8443"; fi
 if systemctl is-active --quiet hysteria-server; then clear_fail hysteria-server; else restart_after_3_fails hysteria-server hysteria-server "UDP"; fi
 if systemctl is-active --quiet udp-custom; then clear_fail udp-custom; else restart_after_3_fails udp-custom udp-custom "UDP"; fi
 if systemctl is-active --quiet zivpn; then clear_fail zivpn; else restart_after_3_fails zivpn zivpn "UDP"; fi
+if systemctl is-active --quiet udp-socksip; then clear_fail udp-socksip; else restart_after_3_fails udp-socksip udp-socksip "UDP"; fi
 ServiceChecker
 
 chmod 755 /etc/deekayvpn/service_checker.sh
@@ -1001,7 +985,7 @@ mkdir -p /var/run/sslh; touch /var/run/sslh/sslh.pid; chmod 777 /var/run/sslh/ss
 # Standard INPUT rule for Port 53
 iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53 -j ACCEPT
 
-# 🚨 NEW FIX: VIP Pass for Port 53 (Prevents UDP Custom from swallowing SlowDNS traffic)
+# NEW FIX: VIP Pass for Port 53 (Prevents UDP Custom from swallowing SlowDNS traffic)
 iptables -t nat -C PREROUTING -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -t nat -I PREROUTING 1 -p udp --dport 53 -j ACCEPT
 
 # Hysteria NAT Routing
@@ -1072,6 +1056,27 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload; systemctl enable udp-custom; systemctl start udp-custom 2>/dev/null || true
 
+# === SOCKS-IP UDP SERVER ===
+echo "Installing SocksIP UDP Server..."
+wget -q -O /usr/bin/udpServer "https://bitbucket.org/iopmx/udprequestserver/downloads/udpServer" || true
+chmod +x /usr/bin/udpServer 2>/dev/null || true
+IFACE="$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)"
+cat > /etc/systemd/system/udp-socksip.service <<EOF
+[Unit]
+Description=SocksIP UDP Server
+After=network.target
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/udpServer -ip=$IPADDR -net=${IFACE} -mode=system -exclude=53,443,36712,36717,5667
+Restart=always
+RestartSec=3s
+LimitNOFILE=1048576
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload; systemctl enable udp-socksip; systemctl start udp-socksip 2>/dev/null || true
+
 # === ZIVPN (Port 5667) ===
 echo "Installing ZiVPN..."
 mkdir -p /etc/zivpn
@@ -1107,7 +1112,7 @@ WorkingDirectory=/etc/zivpn
 ExecStart=/usr/local/bin/zivpn server -c /etc/zivpn/config.json
 Restart=always
 RestartSec=3
-Environment=ZIVPN_LOG_LEVEL=warning
+Environment=ZIVPN_LOG_LEVEL=info
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=true
@@ -1173,7 +1178,7 @@ buffer_mem() { free -m 2>/dev/null | awk '/Mem:/ {print $6 "M"}'; }
 
 server_status() {
   local ok=0
-  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-server ws-proxy@10080 xray badvpn udp-custom zivpn; do
+  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-server ws-proxy@10080 xray badvpn udp-custom udp-socksip zivpn; do
     systemctl is-active --quiet "$s" 2>/dev/null && ok=$((ok+1))
   done
   [ "$ok" -ge 6 ] && echo -e "${GREEN}ONLINE${NC}" || echo -e "${RED}ISSUES DETECTED${NC}"
@@ -1405,7 +1410,7 @@ add_xray() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   echo -e " [1] VLESS (All Transports + REALITY + QUIC)"
   echo -e " [2] VMESS (WS / gRPC)"
-  echo -e " [3] TROJAN (All Transports + Dedicated TCP)"
+  echo -e " [3] TROJAN (All Transports)"
   echo -e " [4] ALL-IN-ONE (Every Protocol & Transport)"
   read -rp " Select Protocol: " prot
   read -rp " Username: " user
@@ -1480,18 +1485,6 @@ add_xray() {
     echo -e "gRPC: trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&host=${DOMAIN}&sni=${DOMAIN}#${user}-gRPC"
     echo -e "HTTPUpgrade: trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}#${user}-HU"
     echo -e "xHTTP: trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}#${user}-xHTTP"
-    
-    echo -e "\n${YELLOW}=== TROJAN TLS DEDICATED (TCP 20443) ===${NC}"
-    echo -e "TCP: trojan://${pass}@${DOMAIN}:20443?security=tls&headerType=none&type=tcp&sni=${DOMAIN}#${user}-TCP"
-
-    echo -e "\n${YELLOW}=== TROJAN NTLS (80) [NOT RECOMMENDED] ===${NC}"
-    echo -e "WS: trojan://${pass}@${DOMAIN}:80?type=ws&security=none&path=%2Ftrojan-ws&host=${DOMAIN}#${user}-WS-NTLS"
-    echo -e "gRPC: trojan://${pass}@${DOMAIN}:80?type=grpc&security=none&serviceName=trojan-grpc&host=${DOMAIN}#${user}-gRPC-NTLS"
-    echo -e "HTTPUpgrade: trojan://${pass}@${DOMAIN}:80?type=httpupgrade&security=none&path=%2Ftrojan-hu&host=${DOMAIN}#${user}-HU-NTLS"
-    echo -e "xHTTP: trojan://${pass}@${DOMAIN}:80?type=xhttp&security=none&path=%2Ftrojan-xhttp&host=${DOMAIN}#${user}-xHTTP-NTLS"
-    
-    echo -e "\n${YELLOW}=== TROJAN NTLS DEDICATED (TCP 20080) [EXTREMELY RISKY] ===${NC}"
-    echo -e "TCP: trojan://${pass}@${DOMAIN}:20080?security=none&headerType=none&type=tcp#${user}-TCP-NTLS"
   fi
 
   echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
@@ -1578,7 +1571,7 @@ show_xray() {
   if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
     echo -e "${YELLOW}=== TROJAN LINKS FOR $user ===${NC}"
-    echo -e "TROJAN TLS TCP: trojan://${pass}@${DOMAIN}:20443?security=tls&headerType=none&type=tcp&sni=${DOMAIN}#${user}-TCP\n"
+    echo -e "TROJAN TLS WS: trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}#${user}-WS\n"
     found=1
   fi
   if [ "$found" -eq 0 ]; then echo -e "${RED}User not found in any protocol.${NC}"; fi
@@ -1639,6 +1632,7 @@ create_user() {
   echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086, 25"
   echo -e "  SlowDNS    : 53"
   echo -e "  UDP Custom : 1-65535"
+  echo -e "  SocksIP    : 1-65535"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
   echo -e "  ${BOLD}Payload HTTP     :${NC}"
   echo -e "  ${YELLOW}GET / HTTP/1.1[crlf]Host: ${DOMAIN}[crlf]Connection: upgrade[crlf]Upgrade: websocket[crlf][crlf]${NC}"
@@ -1760,16 +1754,16 @@ service_control_menu() {
     echo -e "  [${YELLOW}03${NC}] Restart Node WebSocket Proxies"
     echo -e "  [${YELLOW}04${NC}] Restart Stunnel & Xray Core"
     echo -e "  [${YELLOW}05${NC}] Restart Squid Proxy & Nginx"
-    echo -e "  [${YELLOW}06${NC}] Restart UDP Core (SlowDNS/Hysteria/ZiVPN/UDP-Custom)"
+    echo -e "  [${YELLOW}06${NC}] Restart UDP Core (SlowDNS/Hysteria/ZiVPN/UDP-Custom/SocksIP)"
     echo -e "  [${YELLOW}00${NC}] Back\n"
     read -rp "  Select an option: " opt
     case "$opt" in
-      1|01) restart_service "ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray" "All Services"; pause_return ;;
+      1|01) restart_service "ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn udp-socksip ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray" "All Services"; pause_return ;;
       2|02) restart_service "ssh dropbear" "SSH & Dropbear"; pause_return ;;
       3|03) restart_service "ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086" "Node WebSocket Proxies"; pause_return ;;
       4|04) restart_service "stunnel4 xray" "Stunnel & Xray Core"; pause_return ;;
       5|05) restart_service "squid nginx" "Squid Proxy & Nginx"; pause_return ;;
-      6|06) restart_service "server-sldns hysteria-server badvpn udp-custom zivpn" "UDP Core Services"; pause_return ;;
+      6|06) restart_service "server-sldns hysteria-server badvpn udp-custom zivpn udp-socksip" "UDP Core Services"; pause_return ;;
       0|00) break ;;
       *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
     esac
@@ -1780,7 +1774,7 @@ service_control_menu() {
 backup_snapshot() {
   clear; local out="/root/guruzgh_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
   echo -e "Packaging server configurations..."
-  tar -czf "$out" /etc/ssh /etc/default/dropbear /etc/stunnel /etc/squid /etc/hysteria /etc/zivpn /root/udp /etc/deekayvpn /etc/systemd/system/ws-proxy@.service /etc/xray 2>/dev/null
+  tar -czf "$out" /etc/ssh /etc/default/dropbear /etc/stunnel /etc/squid /etc/hysteria /etc/zivpn /root/udp /etc/deekayvpn /etc/systemd/system/ws-proxy@.service /etc/systemd/system/udp-socksip.service /etc/xray 2>/dev/null
   echo -e "\n${GREEN}✔ Backup successfully created!${NC}\nLocation: ${YELLOW}$out${NC}"
   pause_return
 }
@@ -1802,7 +1796,7 @@ restore_snapshot() {
   if [ -n "${backups[$idx]}" ]; then
     echo -e "\nRestoring ${YELLOW}$(basename "${backups[$idx]}")${NC}..."
     tar -xzf "${backups[$idx]}" -C /
-    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray 2>/dev/null || true
+    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn udp-socksip ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray 2>/dev/null || true
     echo -e "${GREEN}✔ Restore complete!${NC}"
   else echo -e "${RED}Invalid selection.${NC}"; fi
   pause_return
@@ -1895,7 +1889,7 @@ advanced_menu() {
     case "$opt" in
       1|01) clear; cat /etc/hysteria/config.json 2>/dev/null || echo "Not found."; pause_return ;;
     2|02) 
-        clear; echo -e "[1] SSH  [2] WS-Proxies  [3] Hysteria  [4] Stunnel  [5] SlowDNS  [6] Xray  [7] UDP Custom  [8] ZiVPN\n"
+        clear; echo -e "[1] SSH  [2] WS-Proxies  [3] Hysteria  [4] Stunnel  [5] SlowDNS  [6] Xray  [7] UDP Custom  [8] ZiVPN  [9] SocksIP\n"
         read -rp "Select log: " lopt
         case "$lopt" in
           1) journalctl -u ssh -n 50 --no-pager ;;
@@ -1906,6 +1900,7 @@ advanced_menu() {
           6) journalctl -u xray -n 50 --no-pager ;;
           7) journalctl -u udp-custom -n 50 --no-pager ;;
           8) journalctl -u zivpn -n 50 --no-pager ;;
+          9) journalctl -u udp-socksip -n 50 --no-pager ;;
         esac; pause_return ;;
       3|03) change_domain ;;
       4|04) change_slowdns ;;
@@ -1923,13 +1918,13 @@ remove_script() {
   read -rp "  Are you absolutely sure? [y/N]: " ans
   if [[ "$ans" =~ ^[Yy]$ ]]; then
       echo -e "\nStopping services..."
-      systemctl stop ws-proxy@* server-sldns badvpn hysteria-server udp-custom zivpn sslh stunnel4 squid dropbear nginx xray 2>/dev/null || true
-      systemctl disable ws-proxy@* server-sldns badvpn hysteria-server udp-custom zivpn xray 2>/dev/null || true
+      systemctl stop ws-proxy@* server-sldns badvpn hysteria-server udp-custom zivpn udp-socksip sslh stunnel4 squid dropbear nginx xray 2>/dev/null || true
+      systemctl disable ws-proxy@* server-sldns badvpn hysteria-server udp-custom zivpn udp-socksip xray 2>/dev/null || true
       echo "Deleting files..."
       rm -f /etc/systemd/system/ws-proxy@.service /etc/systemd/system/server-sldns.service /etc/systemd/system/badvpn.service /etc/systemd/system/xray.service
-      rm -f /etc/systemd/system/udp-custom.service /etc/systemd/system/zivpn.service /etc/systemd/system/zivpn-nat.service
+      rm -f /etc/systemd/system/udp-custom.service /etc/systemd/system/zivpn.service /etc/systemd/system/zivpn-nat.service /etc/systemd/system/udp-socksip.service
       rm -f /etc/cron.d/service-checker /etc/cron.d/logrotate /etc/cron.d/xray-expiry /etc/cron.d/hysteria-expiry /etc/cron.d/zivpn-expiry /etc/sysctl.d/99-freenet-tuning.conf /etc/security/limits.d/99-freenet.conf
-      rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /etc/hysteria /etc/zivpn /root/udp /usr/local/bin/menu /usr/bin/menu /usr/bin/Menu
+      rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /etc/hysteria /etc/zivpn /root/udp /usr/bin/udpServer /usr/local/bin/menu /usr/bin/menu /usr/bin/Menu
       systemctl daemon-reload; sysctl --system >/dev/null 2>&1 || true
       echo -e "${GREEN}✔ Removal complete.${NC}"
   else echo "Cancelled."; fi
@@ -1961,9 +1956,10 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SSL:" "443" "SSL/PYTHON:" "443"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "80, 8080, 8880" "Squid:" "3128, 8000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086, 25" "BadVPN:" "7300"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443, 8443, 20443" "XRAY NTLS:" "80, 20080"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443, 8443" "XRAY NTLS:" "80"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "UDPCustom:" "1-65535" "ZiVPN:" "6000-19999"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SocksIP UDP:" "System Mode" " " " "
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   printf "  ${WHITE}%-10s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-10s${NC} ${YELLOW}%-10s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM Used:" "$ram" "CPU Used:" "$cpu" "Buffer:" "$buf"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
@@ -1971,7 +1967,7 @@ draw_header() {
 
 while true; do
   clear; draw_header; echo
-  echo -e "  [${YELLOW}01${NC}] SSH Account Management (Legacy & UDP Custom)"
+  echo -e "  [${YELLOW}01${NC}] SSH Account Management (Legacy/SocksIP/UDP-Custom)"
   echo -e "  [${YELLOW}02${NC}] Xray Account Management (V2ray/REALITY/QUIC)"
   echo -e "  [${YELLOW}03${NC}] Hysteria Account Management (UDP)"
   echo -e "  [${YELLOW}04${NC}] ZiVPN Account Management (UDP)"
