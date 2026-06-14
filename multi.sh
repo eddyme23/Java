@@ -20,7 +20,7 @@ esac
 
 echo "============================================================"
 echo "              Guruz GH SSH Script Installer"
-echo "  (Multi-Protocol: SSH/Xray[Adv]/Hysteria/ZiVPN/UDPC/SocksIP)"
+echo "  (Multi-Protocol: SSH/Xray/Hysteria/ZiVPN/UDPC/SocksIP)"
 echo "============================================================"
 echo ""
 echo "Supported Operating Systems:"
