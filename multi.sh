@@ -18,10 +18,10 @@ case "$ID:$VERSION_ID" in
   *) SUPPORT_LEVEL="unsupported" ;;
 esac
 
-echo "==============================================================================="
-echo "                        Guruz GH SSH Script Installer"
-echo "        (Multi-Protocol Edition: SSH/Xray/Hysteria-1/ZiVPN/UDP-Custom/SocksIP)"
-echo "==============================================================================="
+echo "============================================================"
+echo "              Guruz GH SSH Script Installer"
+echo "  (Multi-Protocol: SSH/Xray[Adv]/Hysteria/ZiVPN/UDPC/SocksIP)"
+echo "============================================================"
 echo ""
 echo "Supported Operating Systems:"
 echo ""
@@ -31,7 +31,7 @@ echo "  ✔ Ubuntu 24.04           (Supported)"
 echo "  ✔ Ubuntu 22.04           (Recommended)"
 echo "  ✔ Ubuntu 20.04           (Legacy Support)"
 echo ""
-echo "==============================================================================="
+echo "============================================================"
 sleep 2
 
 if [ "$SUPPORT_LEVEL" = "unsupported" ]; then
@@ -281,6 +281,7 @@ ClientAliveInterval 300
 ClientAliveCountMax 2
 UseDNS no
 Banner /etc/zorro-luffy
+LogLevel QUIET
 AcceptEnv LANG LC_*
 Subsystem sftp SFTP_SUBSYSTEM
 MySSHConfig
@@ -434,7 +435,7 @@ service
 systemctl daemon-reload
 for port in "${WsPorts[@]}"; do systemctl enable ws-proxy@$port; systemctl restart ws-proxy@$port; done
 
-# === XRAY CORE ===
+# === XRAY CORE (WITH ADVANCED PROTOCOLS) ===
 echo "Installing Stable Xray Core v26.5.9..."
 XRAY_VER="v26.5.9"
 wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip"
@@ -662,7 +663,7 @@ if check_port SSLHPORT && systemctl is-active --quiet sslh; then clear_fail sslh
 if check_port SQUIDPORT1 && check_port SQUIDPORT2 && systemctl is-active --quiet squid; then clear_fail squid; else restart_after_3_fails squid squid "SQUIDPORT1,SQUIDPORT2"; fi
 if check_port NGINXPORT && systemctl is-active --quiet nginx; then clear_fail nginx; else restart_after_3_fails nginx nginx "NGINXPORT"; fi
 for port in 10080 25 2082 2086; do if check_port $port && systemctl is-active --quiet ws-proxy@$port; then clear_fail ws-proxy-$port; else restart_after_3_fails ws-proxy-$port ws-proxy@$port "$port"; fi; done
-if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "443, 80, 8443"; fi
+if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "443, 80"; fi
 if systemctl is-active --quiet hysteria-server; then clear_fail hysteria-server; else restart_after_3_fails hysteria-server hysteria-server "UDP"; fi
 if systemctl is-active --quiet udp-custom; then clear_fail udp-custom; else restart_after_3_fails udp-custom udp-custom "UDP"; fi
 if systemctl is-active --quiet zivpn; then clear_fail zivpn; else restart_after_3_fails zivpn zivpn "UDP"; fi
@@ -741,6 +742,7 @@ net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 SYSCTL
 
+# Systemd Journal Log Cap
 # Aggressive Systemd Journal Log Cap (RAM only to prevent socket freeze)
 sed -i 's/.*SystemMaxUse.*/SystemMaxUse=10M/' /etc/systemd/journald.conf
 sed -i 's/.*Storage.*/Storage=volatile/' /etc/systemd/journald.conf
@@ -757,7 +759,6 @@ cat <<'EOF' > /etc/rsyslog.d/99-vpn-discard.conf
 :programname, isequal, "stunnel" stop
 EOF
 systemctl restart rsyslog
-
 mkdir -p /etc/security/limits.d
 cat <<'LIMITS' > /etc/security/limits.d/99-freenet.conf
 * soft nofile 1048576
@@ -967,7 +968,7 @@ Wants=network-online.target
 Before=hysteria-server.service
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT)'
+ExecStart=/bin/bash -c 'IFACE=\$(ip -4 route ls|grep default|grep -Po "(?<=dev )(\\\\S+)"|head -1); [ -n "\$IFACE" ] && (iptables -t nat -C PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i "\$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :$HYST_PORT)'
 ExecStart=/bin/bash -c 'iptables -C INPUT -p udp --dport $HYST_PORT -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport $HYST_PORT -j ACCEPT'
 RemainAfterExit=yes
 [Install]
@@ -992,7 +993,7 @@ iptables -t nat -C PREROUTING -p udp --dport 53 -j ACCEPT 2>/dev/null || iptable
 
 # Hysteria NAT Routing
 IFACE=$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)
-iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
+iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712 2>/dev/null || iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 20000:50000 -j DNAT --to-destination :36712
 deekayz
 
 sed -i "s|MyTimeZone|$MyVPS_Time|g" /etc/deekaystartup
@@ -1213,7 +1214,7 @@ add_zivpn() {
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     echo -e " ${BOLD}IP:${NC}          ${YELLOW}$(server_ip)${NC}"
     echo -e " ${BOLD}Domain:${NC}      ${YELLOW}${DOMAIN:-$(server_ip)}${NC}"
-    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}6000-19999 (-> 5667)${NC}"
+    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}6000-19999${NC}"
     echo -e " ${BOLD}User (Pass):${NC} ${YELLOW}${new_pass}${NC}"
     echo -e " ${BOLD}Obfs:${NC}        ${YELLOW}${OBFS_VAL}${NC}"
     echo -e " ${BOLD}Expiry Date:${NC} ${YELLOW}${exp_date}${NC}"
@@ -1312,7 +1313,7 @@ add_hysteria() {
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     echo -e " ${BOLD}IP:${NC}          ${YELLOW}$(server_ip)${NC}"
     echo -e " ${BOLD}Domain:${NC}      ${YELLOW}${DOMAIN:-$(server_ip)}${NC}"
-    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}20000-50000 (-> 36712)${NC}"
+    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}20000-50000${NC}"
     echo -e " ${BOLD}User (Pass):${NC} ${YELLOW}${new_pass}${NC}"
     echo -e " ${BOLD}Obfs:${NC}        ${YELLOW}${OBFS_VAL}${NC}"
     echo -e " ${BOLD}Expiry Date:${NC} ${YELLOW}${exp_date}${NC}"
@@ -1410,9 +1411,9 @@ add_xray() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   echo -e "                   ${BOLD}CREATE XRAY ACCOUNT${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e " [1] VLESS (TCP / WS / gRPC / HU / xHTTP / REALITY)"
+  echo -e " [1] VLESS (TCP / WS / gRPC / HTTPUpgrade / xHTTP / REALITY)"
   echo -e " [2] VMESS (WS / gRPC)"
-  echo -e " [3] TROJAN (WS / gRPC / HU / xHTTP)"
+  echo -e " [3] TROJAN (WS / gRPC / HTTPUpgrade / xHTTP)"
   echo -e " [4] ALL-IN-ONE (Every Protocol & Transport)"
   read -rp " Select Protocol: " prot
   read -rp " Username: " user
@@ -1445,14 +1446,14 @@ add_xray() {
     echo -e "TCP:   vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&headerType=none&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-TCP"
     echo -e "WS:    vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
     echo -e "gRPC:  vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=vless-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
-    echo -e "HU:    vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fvless-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
+    echo -e "HTTPUpgrade:    vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fvless-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
     echo -e "xHTTP: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
     
     echo -e "\n${YELLOW}--- NTLS (80/8080/8880) ---${NC}"
     echo -e "TCP:   vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&headerType=none&host=${DOMAIN}#${user}-TCP-NTLS"
     echo -e "WS:    vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless-ws&host=${DOMAIN}#${user}-WS-NTLS"
     echo -e "gRPC:  vless://${uuid}@${DOMAIN}:80?type=grpc&security=none&encryption=none&serviceName=vless-grpc&host=${DOMAIN}#${user}-gRPC-NTLS"
-    echo -e "HU:    vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fvless-hu&host=${DOMAIN}#${user}-HU-NTLS"
+    echo -e "HTTPUpgrade:    vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fvless-hu&host=${DOMAIN}#${user}-HU-NTLS"
     echo -e "xHTTP: vless://${uuid}@${DOMAIN}:80?type=xhttp&security=none&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}#${user}-xHTTP-NTLS"
 
     echo -e "\n${YELLOW}--- REALITY (8443) ---${NC}"
@@ -1493,7 +1494,7 @@ add_xray() {
     echo -e "\n${YELLOW}--- TLS (443) ---${NC}"
     echo -e "WS:    trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
     echo -e "gRPC:  trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
-    echo -e "HU:    trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
+    echo -e "HTTPUpgrade:    trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
     echo -e "xHTTP: trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
     echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
   fi
@@ -1567,14 +1568,14 @@ show_xray() {
     echo -e "TCP:   vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&headerType=none&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-TCP"
     echo -e "WS:    vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
     echo -e "gRPC:  vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=vless-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
-    echo -e "HU:    vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fvless-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
+    echo -e "HTTPUpgrade:    vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fvless-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
     echo -e "xHTTP: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
     
     echo -e "\n${YELLOW}--- NTLS (80/8080/8880) ---${NC}"
     echo -e "TCP:   vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&headerType=none&host=${DOMAIN}#${user}-TCP-NTLS"
     echo -e "WS:    vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless-ws&host=${DOMAIN}#${user}-WS-NTLS"
     echo -e "gRPC:  vless://${uuid}@${DOMAIN}:80?type=grpc&security=none&encryption=none&serviceName=vless-grpc&host=${DOMAIN}#${user}-gRPC-NTLS"
-    echo -e "HU:    vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fvless-hu&host=${DOMAIN}#${user}-HU-NTLS"
+    echo -e "HTTPUpgrade:    vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fvless-hu&host=${DOMAIN}#${user}-HU-NTLS"
     echo -e "xHTTP: vless://${uuid}@${DOMAIN}:80?type=xhttp&security=none&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}#${user}-xHTTP-NTLS"
 
     echo -e "\n${YELLOW}--- REALITY (8443) ---${NC}"
@@ -1607,7 +1608,7 @@ show_xray() {
     echo -e "\n${YELLOW}--- TLS (443) ---${NC}"
     echo -e "WS:    trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
     echo -e "gRPC:  trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
-    echo -e "HU:    trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
+    echo -e "HTTPUpgrade:    trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
     echo -e "xHTTP: trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
     echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
     found=1
@@ -1994,10 +1995,10 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SSL:" "443" "SSL/PYTHON:" "443"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "80, 8080, 8880" "Squid:" "3128, 8000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086, 25" "BadVPN:" "7300"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443, 8443" "XRAY NTLS:" "80, 8080, 8880"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "UDPCustom:" "1-65535" "ZiVPN:" "6000-19999"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SocksIP:" "1-65535" " " " "
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SocksIP:" "1-65535" "XRAY REALITY " " 8443"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   printf "  ${WHITE}%-10s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-10s${NC} ${YELLOW}%-10s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM Used:" "$ram" "CPU Used:" "$cpu" "Buffer:" "$buf"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
