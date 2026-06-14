@@ -447,7 +447,7 @@ touch /etc/xray/vless.txt /etc/xray/vmess.txt /etc/xray/trojan.txt
 
 cat <<EOF > /etc/xray/config.json
 {
-  "log": { "access": "none", "error": "/var/log/xray/error.log", "loglevel": "warning" },
+  "log": { "access": "none", "error": "/var/log/xray/error.log", "loglevel": "error" },
   "inbounds": [
     {
       "port": 443, "protocol": "vless",
