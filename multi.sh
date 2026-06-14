@@ -20,7 +20,7 @@ esac
 
 echo "============================================================"
 echo "              Guruz GH SSH Script Installer"
-echo "  (Multi-Protocol: SSH/Xray/Hysteria/ZiVPN/UDPC/SocksIP)"
+echo "  (Multi-Protocol Edition: SSH/Xray/Hysteria/ZiVPN/UDP Custom/SocksIP)"
 echo "============================================================"
 echo ""
 echo "Supported Operating Systems:"
@@ -435,7 +435,7 @@ service
 systemctl daemon-reload
 for port in "${WsPorts[@]}"; do systemctl enable ws-proxy@$port; systemctl restart ws-proxy@$port; done
 
-# === XRAY CORE (WITH ADVANCED PROTOCOLS) ===
+# === XRAY CORE ===
 echo "Installing Stable Xray Core v26.5.9..."
 XRAY_VER="v26.5.9"
 wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip"
@@ -445,81 +445,50 @@ chmod +x /usr/local/bin/xray
 rm -rf /tmp/xray*
 touch /etc/xray/vless.txt /etc/xray/vmess.txt /etc/xray/trojan.txt
 
-# Generate REALITY Keys Safely (Bulletproof Extraction)
-rm -f /etc/xray/reality.env 
-R_KEYS=$(/usr/local/bin/xray x25519 2>&1)
-REALITY_PRIVATE=$(echo "$R_KEYS" | grep -i "Private" | awk -F ':' '{print $2}' | tr -d ' ' | tr -d '\r')
-REALITY_PUBLIC=$(echo "$R_KEYS" | grep -i "Public" | awk -F ':' '{print $2}' | tr -d ' ' | tr -d '\r')
-REALITY_SHORTID=$(openssl rand -hex 8)
-
-echo "REALITY_PRIVATE=$REALITY_PRIVATE" > /etc/xray/reality.env
-echo "REALITY_PUBLIC=$REALITY_PUBLIC" >> /etc/xray/reality.env
-echo "REALITY_SHORTID=$REALITY_SHORTID" >> /etc/xray/reality.env
-
 cat <<EOF > /etc/xray/config.json
 {
-  "log": { "access": "none", "error": "/var/log/xray/error.log", "loglevel": "warning" },
+  "log": { "access": "none", "error": "/var/log/xray/error.log", "loglevel": "error" },
   "inbounds": [
     {
-      "tag": "vless-tcp-tls",
-      "port": 443,
-      "protocol": "vless",
-      "settings": {
-        "clients": [], "decryption": "none",
-        "fallbacks": [
-          { "path": "/vmess-ws", "dest": 10001 }, { "path": "/trojan-ws", "dest": 10002 }, { "path": "/vless-ws", "dest": 10003 },
-          { "path": "/vless-grpc", "dest": 10011 }, { "path": "/vmess-grpc", "dest": 10012 }, { "path": "/trojan-grpc", "dest": 10013 },
-          { "path": "/vless-hu", "dest": 10021 }, { "path": "/vless-xhttp", "dest": 10031 }, { "path": "/trojan-hu", "dest": 10023 }, { "path": "/trojan-xhttp", "dest": 10033 },
-          { "dest": 666 }
-        ]
-      },
-      "streamSettings": { "network": "tcp", "security": "tls", "tlsSettings": { "alpn": ["h2", "http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] } }
+      "port": 443, "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none", "fallbacks": [ 
+        { "path": "/vmess", "dest": 10001 }, 
+        { "path": "/trojan", "dest": 10002 }, 
+        { "path": "/vless", "dest": 10003 },
+        { "path": "/vless-grpc", "dest": 10011 }, 
+        { "path": "/vmess-grpc", "dest": 10012 }, 
+        { "path": "/trojan-grpc", "dest": 10013 },
+        { "path": "/vless-hu", "dest": 10021 }, 
+        { "path": "/trojan-hu", "dest": 10023 }, 
+        { "path": "/vless-xhttp", "dest": 10031 }, 
+        { "path": "/trojan-xhttp", "dest": 10033 },
+        { "dest": 666 } 
+      ] },
+      "streamSettings": { "network": "tcp", "security": "tls", "tlsSettings": { "alpn": ["http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] } }
     },
-    {
-      "tag": "vless-tcp-ntls",
-      "port": "80,8080,8880",
-      "protocol": "vless",
-      "settings": {
-        "clients": [], "decryption": "none",
-        "fallbacks": [
-          { "path": "/vmess-ws", "dest": 10001 }, { "path": "/vless-ws", "dest": 10003 },
-          { "path": "/vless-grpc", "dest": 10011 }, { "path": "/vmess-grpc", "dest": 10012 },
-          { "path": "/vless-hu", "dest": 10021 }, { "path": "/vless-xhttp", "dest": 10031 },
-          { "dest": 10080 }
-        ]
-      },
-      "streamSettings": { "network": "tcp" }
-    },
-    {
-      "tag": "vless-reality",
-      "port": 8443,
-      "protocol": "vless",
-      "settings": {
-        "clients": [], "decryption": "none",
-        "fallbacks": [
-          { "path": "/vless-grpc-r", "dest": 10014 }, { "path": "/vless-xhttp-r", "dest": 10034 }
-        ]
-      },
-      "streamSettings": {
-        "network": "tcp", "security": "reality",
-        "realitySettings": {
-          "show": false, "dest": "www.microsoft.com:443", "xver": 0, "serverNames": ["www.microsoft.com", "microsoft.com"],
-          "privateKey": "${REALITY_PRIVATE}", "shortIds": ["${REALITY_SHORTID}"]
-        }
-      }
-    },
-    { "tag": "vmess-ws", "listen": "127.0.0.1", "port": 10001, "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess-ws" } } },
-    { "tag": "trojan-ws", "listen": "127.0.0.1", "port": 10002, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan-ws" } } },
-    { "tag": "vless-ws", "listen": "127.0.0.1", "port": 10003, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless-ws" } } },
-    { "tag": "vless-grpc", "listen": "127.0.0.1", "port": 10011, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "grpc", "grpcSettings": { "serviceName": "vless-grpc" } } },
-    { "tag": "vmess-grpc", "listen": "127.0.0.1", "port": 10012, "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "grpc", "grpcSettings": { "serviceName": "vmess-grpc" } } },
-    { "tag": "trojan-grpc", "listen": "127.0.0.1", "port": 10013, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "grpc", "grpcSettings": { "serviceName": "trojan-grpc" } } },
-    { "tag": "vless-grpc-r", "listen": "127.0.0.1", "port": 10014, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "grpc", "grpcSettings": { "serviceName": "vless-grpc-r" } } },
-    { "tag": "vless-hu", "listen": "127.0.0.1", "port": 10021, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "httpupgrade", "httpupgradeSettings": { "path": "/vless-hu" } } },
-    { "tag": "vless-xhttp", "listen": "127.0.0.1", "port": 10031, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/vless-xhttp" } } },
-    { "tag": "trojan-hu", "listen": "127.0.0.1", "port": 10023, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "httpupgrade", "httpupgradeSettings": { "path": "/trojan-hu" } } },
-    { "tag": "trojan-xhttp", "listen": "127.0.0.1", "port": 10033, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/trojan-xhttp" } } },
-    { "tag": "vless-xhttp-r", "listen": "127.0.0.1", "port": 10034, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/vless-xhttp-r" } } }
+    { "listen": "127.0.0.1", "port": 10001, "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess" } } },
+    { "listen": "127.0.0.1", "port": 10002, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan" } } },
+    { "port": "80,8080,8880", "protocol": "vless", "settings": { "clients": [], "decryption": "none", "fallbacks": [ 
+        { "path": "/vless", "dest": 10003 }, 
+        { "path": "/vmess", "dest": 10004 },
+        { "path": "/vless-grpc", "dest": 10011 }, 
+        { "path": "/vmess-grpc", "dest": 10012 },
+        { "path": "/vless-hu", "dest": 10021 }, 
+        { "path": "/vless-xhttp", "dest": 10031 },
+        { "dest": 10080 } 
+    ] }, "streamSettings": { "network": "tcp" } },
+    { "listen": "127.0.0.1", "port": 10003, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless" } } },
+    { "listen": "127.0.0.1", "port": 10004, "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess" } } },
+    
+    { "listen": "127.0.0.1", "port": 10011, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "grpc", "grpcSettings": { "serviceName": "vless-grpc" } } },
+    { "listen": "127.0.0.1", "port": 10012, "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "grpc", "grpcSettings": { "serviceName": "vmess-grpc" } } },
+    { "listen": "127.0.0.1", "port": 10013, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "grpc", "grpcSettings": { "serviceName": "trojan-grpc" } } },
+    
+    { "listen": "127.0.0.1", "port": 10021, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "httpupgrade", "httpupgradeSettings": { "path": "/vless-hu" } } },
+    { "listen": "127.0.0.1", "port": 10023, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "httpupgrade", "httpupgradeSettings": { "path": "/trojan-hu" } } },
+    
+    { "listen": "127.0.0.1", "port": 10031, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/vless-xhttp" } } },
+    { "listen": "127.0.0.1", "port": 10033, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/trojan-xhttp" } } }
   ],
   "outbounds": [ { "protocol": "freedom", "settings": {} }, { "protocol": "blackhole", "settings": {}, "tag": "blocked" } ]
 }
@@ -626,7 +595,7 @@ systemctl restart "$NGINX_SERVICE"
 rm -rf /etc/squid/squid.con*
 cat <<'mySquid' > /etc/squid/squid.conf
 acl server dst IP-ADDRESS/32 localhost
-acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 36712 36717 5667 8443
+acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 36712 36717 5667
 http_port Squid_Port1
 http_port Squid_Port2
 http_access allow server
@@ -741,7 +710,6 @@ net.netfilter.nf_conntrack_udp_timeout = 60
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 SYSCTL
-
 # Systemd Journal Log Cap
 # Aggressive Systemd Journal Log Cap (RAM only to prevent socket freeze)
 sed -i 's/.*SystemMaxUse.*/SystemMaxUse=10M/' /etc/systemd/journald.conf
@@ -750,7 +718,6 @@ grep -q "^SystemMaxUse=10M" /etc/systemd/journald.conf || echo "SystemMaxUse=10M
 grep -q "^Storage=volatile" /etc/systemd/journald.conf || echo "Storage=volatile" >> /etc/systemd/journald.conf
 systemctl restart systemd-journald
 sysctl --system || true
-
 # Prevent Rsyslog from writing heavy VPN logs to disk
 cat <<'EOF' > /etc/rsyslog.d/99-vpn-discard.conf
 :programname, isequal, "dropbear" stop
@@ -1115,7 +1082,7 @@ WorkingDirectory=/etc/zivpn
 ExecStart=/usr/local/bin/zivpn server -c /etc/zivpn/config.json
 Restart=always
 RestartSec=3
-Environment=ZIVPN_LOG_LEVEL=error
+Environment=ZIVPN_LOG_LEVEL=info
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=true
@@ -1181,7 +1148,7 @@ buffer_mem() { free -m 2>/dev/null | awk '/Mem:/ {print $6 "M"}'; }
 
 server_status() {
   local ok=0
-  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-server ws-proxy@10080 xray badvpn udp-custom udp-socksip zivpn; do
+  for s in ssh dropbear stunnel4 squid nginx server-sldns hysteria-server ws-proxy@10080 xray badvpn udp-custom zivpn udp-socksip; do
     systemctl is-active --quiet "$s" 2>/dev/null && ok=$((ok+1))
   done
   [ "$ok" -ge 6 ] && echo -e "${GREEN}ONLINE${NC}" || echo -e "${RED}ISSUES DETECTED${NC}"
@@ -1214,7 +1181,7 @@ add_zivpn() {
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     echo -e " ${BOLD}IP:${NC}          ${YELLOW}$(server_ip)${NC}"
     echo -e " ${BOLD}Domain:${NC}      ${YELLOW}${DOMAIN:-$(server_ip)}${NC}"
-    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}6000-19999${NC}"
+    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}6000-19999 (-> 5667)${NC}"
     echo -e " ${BOLD}User (Pass):${NC} ${YELLOW}${new_pass}${NC}"
     echo -e " ${BOLD}Obfs:${NC}        ${YELLOW}${OBFS_VAL}${NC}"
     echo -e " ${BOLD}Expiry Date:${NC} ${YELLOW}${exp_date}${NC}"
@@ -1313,7 +1280,7 @@ add_hysteria() {
     echo -e "${CYAN}--------------------------------------------------------------${NC}"
     echo -e " ${BOLD}IP:${NC}          ${YELLOW}$(server_ip)${NC}"
     echo -e " ${BOLD}Domain:${NC}      ${YELLOW}${DOMAIN:-$(server_ip)}${NC}"
-    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}20000-50000${NC}"
+    echo -e " ${BOLD}Port Range:${NC}  ${YELLOW}20000-50000 (-> 36712)${NC}"
     echo -e " ${BOLD}User (Pass):${NC} ${YELLOW}${new_pass}${NC}"
     echo -e " ${BOLD}Obfs:${NC}        ${YELLOW}${OBFS_VAL}${NC}"
     echo -e " ${BOLD}Expiry Date:${NC} ${YELLOW}${exp_date}${NC}"
@@ -1411,9 +1378,9 @@ add_xray() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   echo -e "                   ${BOLD}CREATE XRAY ACCOUNT${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e " [1] VLESS (TCP / WS / gRPC / HTTPUpgrade / xHTTP / REALITY)"
-  echo -e " [2] VMESS (WS / gRPC)"
-  echo -e " [3] TROJAN (WS / gRPC / HTTPUpgrade / xHTTP)"
+  echo -e " [1] VLESS (TLS & NTLS & gRPC & HTTPUpgrade & xHTTP)"
+  echo -e " [2] VMESS (TLS & NTLS & gRPC)"
+  echo -e " [3] TROJAN (TLS & gRPC & HTTPUpgrade & xHTTP)"
   echo -e " [4] ALL-IN-ONE (Every Protocol & Transport)"
   read -rp " Select Protocol: " prot
   read -rp " Username: " user
@@ -1433,69 +1400,51 @@ add_xray() {
   fi
 
   pass="Guruz${uuid:0:6}"
-  source /etc/xray/reality.env 2>/dev/null
   
   if [ "$prot" == "1" ] || [ "$prot" == "4" ]; then
-    # Safely inject into ALL VLESS inbounds dynamically
     jq "(.inbounds[] | select(.protocol == \"vless\").settings.clients) += [{\"id\": \"$uuid\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     echo "$user $uuid $exp" >> /etc/xray/vless.txt
     
     echo -e "\n${GREEN}════════ VLESS ACCOUNT ════════${NC}"
     echo -e "Username : $user\nExpiry   : $exp"
-    echo -e "\n${YELLOW}--- TLS (443) ---${NC}"
-    echo -e "TCP:   vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&headerType=none&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-TCP"
-    echo -e "WS:    vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
-    echo -e "gRPC:  vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=vless-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
-    echo -e "HTTPUpgrade:    vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fvless-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
-    echo -e "xHTTP: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
+    echo -e "\n${YELLOW}TLS (443):${NC}\nTCP/WS: vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "gRPC:   vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=vless-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
+    echo -e "HU:     vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fvless-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
+    echo -e "xHTTP:  vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
     
-    echo -e "\n${YELLOW}--- NTLS (80/8080/8880) ---${NC}"
-    echo -e "TCP:   vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&headerType=none&host=${DOMAIN}#${user}-TCP-NTLS"
-    echo -e "WS:    vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless-ws&host=${DOMAIN}#${user}-WS-NTLS"
-    echo -e "gRPC:  vless://${uuid}@${DOMAIN}:80?type=grpc&security=none&encryption=none&serviceName=vless-grpc&host=${DOMAIN}#${user}-gRPC-NTLS"
-    echo -e "HTTPUpgrade:    vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fvless-hu&host=${DOMAIN}#${user}-HU-NTLS"
-    echo -e "xHTTP: vless://${uuid}@${DOMAIN}:80?type=xhttp&security=none&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}#${user}-xHTTP-NTLS"
-
-    echo -e "\n${YELLOW}--- REALITY (8443) ---${NC}"
-    echo -e "TCP:   vless://${uuid}@${DOMAIN}:8443?type=tcp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome#${user}-REALITY-TCP"
-    echo -e "gRPC:  vless://${uuid}@${DOMAIN}:8443?type=grpc&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome&serviceName=vless-grpc-r#${user}-REALITY-gRPC"
-    echo -e "xHTTP: vless://${uuid}@${DOMAIN}:8443?type=xhttp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome&path=%2Fvless-xhttp-r#${user}-REALITY-xHTTP"
+    echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nTCP/WS: vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}"
+    echo -e "gRPC:   vless://${uuid}@${DOMAIN}:80?type=grpc&security=none&encryption=none&serviceName=vless-grpc&host=${DOMAIN}#${user}-gRPC"
+    echo -e "HU:     vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fvless-hu&host=${DOMAIN}#${user}-HU"
+    echo -e "xHTTP:  vless://${uuid}@${DOMAIN}:80?type=xhttp&security=none&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}#${user}-xHTTP"
     echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
   fi
   
   if [ "$prot" == "2" ] || [ "$prot" == "4" ]; then
-    # Safely inject into ALL VMESS inbounds dynamically
     jq "(.inbounds[] | select(.protocol == \"vmess\").settings.clients) += [{\"id\": \"$uuid\", \"alterId\": 0, \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     echo "$user $uuid $exp" >> /etc/xray/vmess.txt
     
     echo -e "\n${GREEN}════════ VMESS ACCOUNT ════════${NC}"
     echo -e "Username: $user\nExpiry: $exp"
-    VMESS_TLS_WS="{\"v\":\"2\",\"ps\":\"${user}-WS-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
-    VMESS_TLS_GRPC="{\"v\":\"2\",\"ps\":\"${user}-gRPC-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
-    echo -e "\n${YELLOW}--- TLS (443) ---${NC}"
-    echo -e "WS:   vmess://$(echo -n "$VMESS_TLS_WS" | base64 -w 0)"
-    echo -e "gRPC: vmess://$(echo -n "$VMESS_TLS_GRPC" | base64 -w 0)"
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
+    VMESS_TLS_GRPC="{\"v\":\"2\",\"ps\":\"${user}-TLS-gRPC\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
+    echo -e "\n${YELLOW}TLS (443):${NC}\nWS:   vmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)\ngRPC: vmess://$(echo -n "$VMESS_TLS_GRPC" | base64 -w 0)"
     
-    VMESS_NTLS_WS="{\"v\":\"2\",\"ps\":\"${user}-WS-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"none\"}"
-    VMESS_NTLS_GRPC="{\"v\":\"2\",\"ps\":\"${user}-gRPC-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"none\"}"
-    echo -e "\n${YELLOW}--- NTLS (80/8080/8880) ---${NC}"
-    echo -e "WS:   vmess://$(echo -n "$VMESS_NTLS_WS" | base64 -w 0)"
-    echo -e "gRPC: vmess://$(echo -n "$VMESS_NTLS_GRPC" | base64 -w 0)"
+    VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
+    VMESS_NTLS_GRPC="{\"v\":\"2\",\"ps\":\"${user}-NTLS-gRPC\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"\"}"
+    echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nWS:   vmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)\ngRPC: vmess://$(echo -n "$VMESS_NTLS_GRPC" | base64 -w 0)"
     echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
   fi
   
   if [ "$prot" == "3" ] || [ "$prot" == "4" ]; then
-    # Safely inject into ALL TROJAN inbounds dynamically
     jq "(.inbounds[] | select(.protocol == \"trojan\").settings.clients) += [{\"password\": \"$pass\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
     echo "$user $pass $exp" >> /etc/xray/trojan.txt
     
     echo -e "\n${GREEN}════════ TROJAN ACCOUNT ════════${NC}"
     echo -e "Username: $user\nPassword: $pass\nExpiry: $exp"
-    echo -e "\n${YELLOW}--- TLS (443) ---${NC}"
-    echo -e "WS:    trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
-    echo -e "gRPC:  trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
-    echo -e "HTTPUpgrade:    trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
-    echo -e "xHTTP: trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
+    echo -e "\n${YELLOW}TLS (443):${NC}\nTCP/WS: trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "gRPC:   trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
+    echo -e "HU:     trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
+    echo -e "xHTTP:  trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
     echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
   fi
 
@@ -1560,57 +1509,39 @@ show_xray() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to view: " user
   local found=0
-  source /etc/xray/reality.env 2>/dev/null
   if grep -qw "^$user" /etc/xray/vless.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
     echo -e "\n${GREEN}════════ VLESS ACCOUNT ════════${NC}"
-    echo -e "\n${YELLOW}--- TLS (443) ---${NC}"
-    echo -e "TCP:   vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&headerType=none&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-TCP"
-    echo -e "WS:    vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
-    echo -e "gRPC:  vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=vless-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
-    echo -e "HTTPUpgrade:    vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fvless-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
-    echo -e "xHTTP: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
+    echo -e "${YELLOW}TLS (443):${NC}\nTCP/WS: vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "gRPC:   vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=vless-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
+    echo -e "HU:     vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fvless-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
+    echo -e "xHTTP:  vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
     
-    echo -e "\n${YELLOW}--- NTLS (80/8080/8880) ---${NC}"
-    echo -e "TCP:   vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&headerType=none&host=${DOMAIN}#${user}-TCP-NTLS"
-    echo -e "WS:    vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless-ws&host=${DOMAIN}#${user}-WS-NTLS"
-    echo -e "gRPC:  vless://${uuid}@${DOMAIN}:80?type=grpc&security=none&encryption=none&serviceName=vless-grpc&host=${DOMAIN}#${user}-gRPC-NTLS"
-    echo -e "HTTPUpgrade:    vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fvless-hu&host=${DOMAIN}#${user}-HU-NTLS"
-    echo -e "xHTTP: vless://${uuid}@${DOMAIN}:80?type=xhttp&security=none&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}#${user}-xHTTP-NTLS"
-
-    echo -e "\n${YELLOW}--- REALITY (8443) ---${NC}"
-    echo -e "TCP:   vless://${uuid}@${DOMAIN}:8443?type=tcp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome#${user}-REALITY-TCP"
-    echo -e "gRPC:  vless://${uuid}@${DOMAIN}:8443?type=grpc&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome&serviceName=vless-grpc-r#${user}-REALITY-gRPC"
-    echo -e "xHTTP: vless://${uuid}@${DOMAIN}:8443?type=xhttp&security=reality&pbk=${REALITY_PUBLIC}&sid=${REALITY_SHORTID}&sni=www.microsoft.com&fp=chrome&path=%2Fvless-xhttp-r#${user}-REALITY-xHTTP"
-    echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
+    echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nTCP/WS: vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}"
+    echo -e "gRPC:   vless://${uuid}@${DOMAIN}:80?type=grpc&security=none&encryption=none&serviceName=vless-grpc&host=${DOMAIN}#${user}-gRPC"
+    echo -e "HU:     vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fvless-hu&host=${DOMAIN}#${user}-HU"
+    echo -e "xHTTP:  vless://${uuid}@${DOMAIN}:80?type=xhttp&security=none&encryption=none&path=%2Fvless-xhttp&host=${DOMAIN}#${user}-xHTTP"
     found=1
   fi
   if grep -qw "^$user" /etc/xray/vmess.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vmess.txt | awk '{print $2}')
     echo -e "\n${GREEN}════════ VMESS ACCOUNT ════════${NC}"
-    VMESS_TLS_WS="{\"v\":\"2\",\"ps\":\"${user}-WS-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
-    VMESS_TLS_GRPC="{\"v\":\"2\",\"ps\":\"${user}-gRPC-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
-    echo -e "\n${YELLOW}--- TLS (443) ---${NC}"
-    echo -e "WS:   vmess://$(echo -n "$VMESS_TLS_WS" | base64 -w 0)"
-    echo -e "gRPC: vmess://$(echo -n "$VMESS_TLS_GRPC" | base64 -w 0)"
+    VMESS_TLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-TLS\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
+    VMESS_TLS_GRPC="{\"v\":\"2\",\"ps\":\"${user}-TLS-gRPC\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
+    echo -e "${YELLOW}TLS (443):${NC}\nWS:   vmess://$(echo -n "$VMESS_TLS_JSON" | base64 -w 0)\ngRPC: vmess://$(echo -n "$VMESS_TLS_GRPC" | base64 -w 0)"
     
-    VMESS_NTLS_WS="{\"v\":\"2\",\"ps\":\"${user}-WS-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess-ws\",\"tls\":\"none\"}"
-    VMESS_NTLS_GRPC="{\"v\":\"2\",\"ps\":\"${user}-gRPC-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"none\"}"
-    echo -e "\n${YELLOW}--- NTLS (80/8080/8880) ---${NC}"
-    echo -e "WS:   vmess://$(echo -n "$VMESS_NTLS_WS" | base64 -w 0)"
-    echo -e "gRPC: vmess://$(echo -n "$VMESS_NTLS_GRPC" | base64 -w 0)"
-    echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
+    VMESS_NTLS_JSON="{\"v\":\"2\",\"ps\":\"${user}-NTLS\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"\"}"
+    VMESS_NTLS_GRPC="{\"v\":\"2\",\"ps\":\"${user}-NTLS-gRPC\",\"add\":\"${DOMAIN}\",\"port\":\"80\",\"id\":\"${uuid}\",\"aid\":\"0\",\"net\":\"grpc\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"vmess-grpc\",\"tls\":\"\"}"
+    echo -e "\n${YELLOW}NTLS (80/8080/8880):${NC}\nWS:   vmess://$(echo -n "$VMESS_NTLS_JSON" | base64 -w 0)\ngRPC: vmess://$(echo -n "$VMESS_NTLS_GRPC" | base64 -w 0)"
     found=1
   fi
   if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
     echo -e "\n${GREEN}════════ TROJAN ACCOUNT ════════${NC}"
-    echo -e "\n${YELLOW}--- TLS (443) ---${NC}"
-    echo -e "WS:    trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan-ws&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
-    echo -e "gRPC:  trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
-    echo -e "HTTPUpgrade:    trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
-    echo -e "xHTTP: trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
-    echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}TLS (443):${NC}\nTCP/WS: trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "gRPC:   trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-gRPC"
+    echo -e "HU:     trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-hu&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HU"
+    echo -e "xHTTP:  trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-xHTTP"
     found=1
   fi
   if [ "$found" -eq 0 ]; then echo -e "${RED}User not found in any protocol.${NC}"; fi
@@ -2000,7 +1931,7 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "UDPCustom:" "1-65535" "ZiVPN:" "6000-19999"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SocksIP:" "1-65535" "XRAY REALITY " " 8443"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SocksIP:" "1-65535" " " " "
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
   printf "  ${WHITE}%-10s${NC} ${YELLOW}%-14s${NC} ${WHITE}%-10s${NC} ${YELLOW}%-10s${NC} ${WHITE}%-8s${NC} ${YELLOW}%s${NC}\n" "RAM Used:" "$ram" "CPU Used:" "$cpu" "Buffer:" "$buf"
   echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
@@ -2008,8 +1939,8 @@ draw_header() {
 
 while true; do
   clear; draw_header; echo
-  echo -e "  [${YELLOW}01${NC}] SSH Account Management (Legacy/SocksIP/UDP-Custom)"
-  echo -e "  [${YELLOW}02${NC}] Xray Account Management (V2ray/REALITY/QUIC)"
+  echo -e "  [${YELLOW}01${NC}] SSH Account Management (Legacy & UDP Custom & SocksIP)"
+  echo -e "  [${YELLOW}02${NC}] Xray Account Management (V2ray)"
   echo -e "  [${YELLOW}03${NC}] Hysteria Account Management (UDP)"
   echo -e "  [${YELLOW}04${NC}] ZiVPN Account Management (UDP)"
   echo -e "  [${YELLOW}05${NC}] Monitor Active Connections"
