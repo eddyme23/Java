@@ -1599,62 +1599,64 @@ extend_user() {
 
 # --- Monitor ---
 online_users() {
-  clear
-  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e "               ${BOLD}ACTIVE USER SESSIONS MONITOR${NC}"
-  echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "         ${YELLOW}REAL-TIME ACTIVE USERS (PROCESS MONITOR)${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e " ${GREEN}Username           | Protocol   | Active Sessions${NC} "
+    echo -e "${CYAN}--------------------------------------------------------------${NC}"
 
-  echo -e "${YELLOW}--- LEGACY SSH & DROPBEAR ---${NC}"
-  declare -A active_ssh
-  mapfile -t USERS < <(awk -F: '$3 >= 1000 && $1 != "nobody" && $1 != "systemd-network" && $1 != "messagebus" {print $1}' /etc/passwd 2>/dev/null)
-  
-  for user in "${USERS[@]}"; do
-      ssh_count=$(ps -u "$user" 2>/dev/null | grep -c "sshd")
-      drop_count=$(ps -ef 2>/dev/null | grep -i "dropbear" | grep -w "$user" | grep -v grep | wc -l)
-      total=$((ssh_count + drop_count))
-      if [ "$total" -gt 0 ]; then active_ssh["$user"]=$total; fi
-  done
+    declare -A ssh_sessions
+    declare -A dropbear_sessions
 
-  if [ "${#active_ssh[@]}" -eq 0 ]; then 
-      echo -e "  No authenticated legacy SSH users are currently online.\n"
-  else
-    printf "  %-25s %-15s\n" "USERNAME" "ACTIVE SESSIONS"
-    echo -e "${CYAN}  ----------------------------------------------------------${NC}"
-    for user in "${!active_ssh[@]}"; do 
-        if [ "${active_ssh[$user]}" -gt 1 ]; then
-            printf "  %-25s ${RED}%-15s (Multi-Login)${NC}\n" "$user" "${active_ssh[$user]}"
-        else
-            printf "  %-25s ${GREEN}%-15s${NC}\n" "$user" "${active_ssh[$user]}"
+    # Get all valid VPN users (UID >= 1000)
+    valid_users=$(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd)
+
+    active_found=0
+
+    for user in $valid_users; do
+        # Count processes running under the authenticated user
+        ssh_count=$(ps -u "$user" 2>/dev/null | grep -c "sshd")
+        drop_count=$(ps -u "$user" 2>/dev/null | grep -c "dropbear")
+
+        if [ "$ssh_count" -gt 0 ]; then
+            ssh_sessions["$user"]=$ssh_count
+            active_found=1
         fi
-    done | sort
-    echo
-  fi
+        
+        if [ "$drop_count" -gt 0 ]; then
+            dropbear_sessions["$user"]=$drop_count
+            active_found=1
+        fi
+    done
 
-  echo -e "${YELLOW}--- XRAY CORE ACTIVE LOGINS (Recent Unique IPs) ---${NC}"
-  if grep -q '"loglevel": "warning"' /etc/xray/config.json 2>/dev/null; then
-      sed -i 's/"loglevel": "warning"/"loglevel": "info"/g' /etc/xray/config.json
-      systemctl restart xray 2>/dev/null
-      echo -e "  [System Note] Xray logging enabled. Reconnect users to see logs.\n"
-  elif [ -f /var/log/xray/access.log ]; then
-      active_xray=$(tail -n 10000 /var/log/xray/access.log 2>/dev/null | grep "accepted" | awk '{ user=""; for(i=1;i<=NF;i++) if($i=="email:") user=$(i+1); if(user!="") { split($3, a, ":"); print user " " a[1] } }' | sort -u | awk '{print $1}' | uniq -c | sort -nr)
-      if [ -z "$active_xray" ]; then 
-          echo -e "  No active Xray users found in recent logs.\n"
-      else
-          printf "  %-15s %-25s\n" "UNIQUE IPs" "USERNAME"
-          echo -e "${CYAN}  ----------------------------------------------------------${NC}"
-          while read -r count username; do 
-              if [ -n "$username" ]; then 
-                  if [ "$count" -gt 1 ]; then
-                      printf "  ${RED}%-15s${NC} %-25s ${RED}(Multi-IP)${NC}\n" "$count" "$username"
-                  else
-                      printf "  %-15s %-25s\n" "$count" "$username"
-                  fi
-              fi
-          done <<< "$active_xray"
-      fi
-  else echo -e "  Xray access log not found.\n"; fi
-  
-  pause_return
+    if [ "$active_found" -eq 0 ]; then
+        echo -e " No active SSH or Dropbear users found right now."
+    else
+        # Output Dropbear Users
+        for user in "${!dropbear_sessions[@]}"; do
+            count="${dropbear_sessions[$user]}"
+            if [ "$count" -gt 1 ]; then
+                printf " %-18s | Dropbear   | ${RED}%-8s (Multi-Login)${NC}\n" "$user" "$count"
+            else
+                printf " %-18s | Dropbear   | ${GREEN}%-8s${NC}\n" "$user" "$count"
+            fi
+        done
+
+        # Output OpenSSH Users
+        for user in "${!ssh_sessions[@]}"; do
+            count="${ssh_sessions[$user]}"
+            if [ "$count" -gt 1 ]; then
+                printf " %-18s | OpenSSH    | ${RED}%-8s (Multi-Login)${NC}\n" "$user" "$count"
+            else
+                printf " %-18s | OpenSSH    | ${GREEN}%-8s${NC}\n" "$user" "$count"
+            fi
+        done
+    fi
+
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    read -n 1 -s -r -p "Press any key to return to menu..."
 }
 
 # --- Service Controls ---
