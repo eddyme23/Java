@@ -366,50 +366,90 @@ const LISTEN_PORT = parseInt(process.argv[2]);
 if (!LISTEN_PORT) { process.exit(1); }
 
 const handleConnection = (clientSocket) => {
-    let isSshBridged = false;
     let targetSocket = null;
+    let headerParsed = false;
+    let awaitingSplitPayload = false;
     let buffer = '';
+    let isConnectMethod = false;
+
+    // Helper to connect to Dropbear and bridge the sockets
+    const connectAndBridge = (leftoverData) => {
+        targetSocket = net.connect(TARGET_PORT, TARGET_HOST, () => {
+            if (isConnectMethod) {
+                clientSocket.write('HTTP/1.1 200 OK\r\n\r\n');
+            } else {
+                clientSocket.write(
+                    'HTTP/1.1 101 Switching Protocols\r\n' +
+                    'Upgrade: websocket\r\n' +
+                    'Connection: Upgrade\r\n\r\n'
+                );
+            }
+            
+            // If there's valid data left after the handshake, forward it
+            if (leftoverData && leftoverData.length > 0) {
+                targetSocket.write(Buffer.from(leftoverData, 'utf8'));
+            }
+            
+            clientSocket.pipe(targetSocket);
+            targetSocket.pipe(clientSocket);
+        });
+
+        targetSocket.on('error', () => clientSocket.destroy());
+        targetSocket.on('close', () => clientSocket.destroy());
+    };
 
     const onClientData = (data) => {
-        if (!isSshBridged) {
+        // 1. If we are waiting for a split payload junk chunk, absorb it and proceed
+        if (awaitingSplitPayload) {
+            awaitingSplitPayload = false;
+            clientSocket.removeListener('data', onClientData);
+            connectAndBridge(''); // Discard this chunk, forward nothing
+            return;
+        }
+
+        // 2. Standard Header Parsing
+        if (!headerParsed) {
             buffer += data.toString('utf8');
+            const headerEndIndex = buffer.indexOf('\r\n\r\n');
             
-            // Wait strictly for the actual SSH protocol to begin
-            if (buffer.includes('SSH-')) {
-                isSshBridged = true;
-                if (targetSocket) {
-                    // Extract ONLY the clean SSH handshake and drop all preceding HTTP junk
-                    const sshStartIndex = buffer.indexOf('SSH-');
-                    const sshData = buffer.substring(sshStartIndex);
-                    targetSocket.write(sshData);
-                    clientSocket.pipe(targetSocket);
+            if (headerEndIndex !== -1) {
+                headerParsed = true;
+                const headerString = buffer.substring(0, headerEndIndex);
+                isConnectMethod = headerString.toUpperCase().startsWith('CONNECT');
+                
+                // Check for custom X-Split header
+                const hasXSplit = /x-split/i.test(headerString);
+                const leftoverData = buffer.substring(headerEndIndex + 4);
+
+                if (hasXSplit) {
+                    if (leftoverData.length > 0) {
+                        // The junk payload was sent in the same packet as the header. Discard it.
+                        clientSocket.removeListener('data', onClientData);
+                        connectAndBridge('');
+                    } else {
+                        // The junk payload is coming in the next packet. Wait for it.
+                        awaitingSplitPayload = true;
+                    }
+                } else {
+                    // Standard flow: no X-Split, proceed immediately
+                    clientSocket.removeListener('data', onClientData);
+                    connectAndBridge(leftoverData);
                 }
-                clientSocket.removeListener('data', onClientData);
-            } 
-            // First HTTP packet: connect to Dropbear & send 101 Upgrade
-            else if (!targetSocket) {
-                targetSocket = net.connect(TARGET_PORT, TARGET_HOST, () => {
-                    clientSocket.write(
-                        'HTTP/1.1 101 Switching Protocols\r\n' +
-                        'Upgrade: websocket\r\n' +
-                        'Connection: Upgrade\r\n\r\n'
-                    );
-                    targetSocket.pipe(clientSocket);
-                });
-                targetSocket.on('error', () => clientSocket.destroy());
-                targetSocket.on('close', () => clientSocket.destroy());
             }
-            // Any trailing HTTP packets (like extra UNLOCK commands) are completely swallowed!
         }
     };
 
     clientSocket.on('data', onClientData);
     clientSocket.on('error', () => {});
-    clientSocket.on('close', () => {});
+    clientSocket.on('close', () => {
+        if (targetSocket) targetSocket.destroy();
+    });
 };
 
 const server = net.createServer(handleConnection);
-server.listen(LISTEN_PORT, '0.0.0.0', () => { console.log(\`WS Proxy active on isolated port \${LISTEN_PORT}\`); });
+server.listen(LISTEN_PORT, '0.0.0.0', () => { 
+    console.log(\`WS Proxy active on isolated port \${LISTEN_PORT}\`); 
+});
 EOF
 
 cat <<'service' > /etc/systemd/system/ws-proxy@.service
