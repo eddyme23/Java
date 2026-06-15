@@ -367,81 +367,49 @@ if (!LISTEN_PORT) { process.exit(1); }
 
 const handleConnection = (clientSocket) => {
     let targetSocket = null;
-    let headerParsed = false;
-    let awaitingSplitPayload = false;
+    let responseSent = false;
+    let sshBridged = false;
     let buffer = '';
 
-    const connectAndBridge = (isRawSSH = false, rawSshData = '') => {
-        targetSocket = net.connect(TARGET_PORT, TARGET_HOST, () => {
-            if (!isRawSSH) {
-                // If it's HTTP, send response and DISCARD leftover junk
-                const isConnect = buffer.toUpperCase().startsWith('CONNECT');
-                if (isConnect) {
-                    clientSocket.write('HTTP/1.1 200 OK\r\n\r\n');
-                } else {
-                    clientSocket.write(
-                        'HTTP/1.1 101 Switching Protocols\r\n' +
-                        'Upgrade: websocket\r\n' +
-                        'Connection: Upgrade\r\n' +
-                        'Sec-WebSocket-Accept: foo\r\n' +
-                        'Content-Length: 104857600000\r\n\r\n'
-                    );
-                }
-            } else {
-                // If it's pure SSH, forward the SSH buffer immediately
-                if (rawSshData.length > 0) {
-                    targetSocket.write(Buffer.from(rawSshData, 'utf8'));
-                }
-            }
-            
-            clientSocket.pipe(targetSocket);
-            targetSocket.pipe(clientSocket);
-        });
-
-        targetSocket.on('error', () => clientSocket.destroy());
-        targetSocket.on('close', () => clientSocket.destroy());
-    };
-
     const onClientData = (data) => {
-        if (awaitingSplitPayload) {
-            awaitingSplitPayload = false;
-            clientSocket.removeListener('data', onClientData);
-            connectAndBridge(false); // Discard this chunk
-            return;
+        if (sshBridged) return; // Connection is already piped to Dropbear
+
+        buffer += data.toString('utf8');
+
+        // 1. Determine and send the correct HTTP response dynamically
+        if (!responseSent && buffer.length > 5) {
+            responseSent = true;
+            const isConnect = buffer.toUpperCase().startsWith('CONNECT');
+            
+            if (isConnect) {
+                clientSocket.write('HTTP/1.1 200 OK\r\n\r\n');
+            } else {
+                clientSocket.write(
+                    'HTTP/1.1 101 Switching Protocols\r\n' +
+                    'Upgrade: websocket\r\n' +
+                    'Connection: Upgrade\r\n\r\n'
+                );
+            }
         }
 
-        if (!headerParsed) {
-            buffer += data.toString('utf8');
+        // 2. Scan for the SSH handshake and violently strip the payload junk
+        const sshIndex = buffer.indexOf('SSH-');
+        if (sshIndex !== -1) {
+            sshBridged = true;
+            clientSocket.removeListener('data', onClientData);
 
-            // 1. Direct SSH Handshake
-            if (buffer.startsWith('SSH-') || buffer.includes('SSH-')) {
-                headerParsed = true;
-                clientSocket.removeListener('data', onClientData);
-                connectAndBridge(true, buffer); 
-                return;
-            }
+            targetSocket = net.connect(TARGET_PORT, TARGET_HOST, () => {
+                // Extract ONLY the clean SSH data and discard everything before it
+                const cleanSshData = buffer.substring(sshIndex);
+                targetSocket.write(Buffer.from(cleanSshData, 'utf8'));
+                
+                // Bridge the connections
+                clientSocket.pipe(targetSocket);
+                targetSocket.pipe(clientSocket);
+            });
 
-            // 2. HTTP/WebSocket Payloads
-            const headerEndIndex = buffer.indexOf('\r\n\r\n');
-            if (headerEndIndex !== -1) {
-                headerParsed = true;
-                const headerString = buffer.substring(0, headerEndIndex);
-                const hasXSplit = /x-split/i.test(headerString);
-                const leftoverData = buffer.substring(headerEndIndex + 4);
-
-                if (hasXSplit) {
-                    if (leftoverData.length > 0) {
-                        clientSocket.removeListener('data', onClientData);
-                        connectAndBridge(false);
-                    } else {
-                        awaitingSplitPayload = true;
-                    }
-                } else {
-                    clientSocket.removeListener('data', onClientData);
-                    // Crucial: we purposely do NOT pass leftoverData to Dropbear
-                    connectAndBridge(false);
-                }
-            }
+            targetSocket.on('error', () => clientSocket.destroy());
+            targetSocket.on('close', () => clientSocket.destroy());
         }
     };
 
