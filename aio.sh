@@ -372,20 +372,21 @@ const handleConnection = (clientSocket) => {
     let buffer = '';
     let isConnectMethod = false;
 
-    // Helper to connect to Dropbear and bridge the sockets
-    const connectAndBridge = (leftoverData) => {
+    const connectAndBridge = (leftoverData, isRawSSH = false) => {
         targetSocket = net.connect(TARGET_PORT, TARGET_HOST, () => {
-            if (isConnectMethod) {
-                clientSocket.write('HTTP/1.1 200 OK\r\n\r\n');
-            } else {
-                clientSocket.write(
-                    'HTTP/1.1 101 Switching Protocols\r\n' +
-                    'Upgrade: websocket\r\n' +
-                    'Connection: Upgrade\r\n\r\n'
-                );
+            // Only send HTTP response headers if it's NOT a raw direct SSH connection
+            if (!isRawSSH) {
+                if (isConnectMethod) {
+                    clientSocket.write('HTTP/1.1 200 OK\r\n\r\n');
+                } else {
+                    clientSocket.write(
+                        'HTTP/1.1 101 Switching Protocols\r\n' +
+                        'Upgrade: websocket\r\n' +
+                        'Connection: Upgrade\r\n\r\n'
+                    );
+                }
             }
             
-            // If there's valid data left after the handshake, forward it
             if (leftoverData && leftoverData.length > 0) {
                 targetSocket.write(Buffer.from(leftoverData, 'utf8'));
             }
@@ -399,39 +400,42 @@ const handleConnection = (clientSocket) => {
     };
 
     const onClientData = (data) => {
-        // 1. If we are waiting for a split payload junk chunk, absorb it and proceed
         if (awaitingSplitPayload) {
             awaitingSplitPayload = false;
             clientSocket.removeListener('data', onClientData);
-            connectAndBridge(''); // Discard this chunk, forward nothing
+            connectAndBridge(''); 
             return;
         }
 
-        // 2. Standard Header Parsing
         if (!headerParsed) {
             buffer += data.toString('utf8');
+
+            // 1. Check for Direct SSH Handshake (No HTTP Headers)
+            if (buffer.includes('SSH-')) {
+                headerParsed = true;
+                clientSocket.removeListener('data', onClientData);
+                connectAndBridge(buffer, true); // True flag bypasses HTTP headers
+                return;
+            }
+
+            // 2. Check for Standard HTTP/WebSocket Payloads
             const headerEndIndex = buffer.indexOf('\r\n\r\n');
-            
             if (headerEndIndex !== -1) {
                 headerParsed = true;
                 const headerString = buffer.substring(0, headerEndIndex);
                 isConnectMethod = headerString.toUpperCase().startsWith('CONNECT');
                 
-                // Check for custom X-Split header
                 const hasXSplit = /x-split/i.test(headerString);
                 const leftoverData = buffer.substring(headerEndIndex + 4);
 
                 if (hasXSplit) {
                     if (leftoverData.length > 0) {
-                        // The junk payload was sent in the same packet as the header. Discard it.
                         clientSocket.removeListener('data', onClientData);
                         connectAndBridge('');
                     } else {
-                        // The junk payload is coming in the next packet. Wait for it.
                         awaitingSplitPayload = true;
                     }
                 } else {
-                    // Standard flow: no X-Split, proceed immediately
                     clientSocket.removeListener('data', onClientData);
                     connectAndBridge(leftoverData);
                 }
