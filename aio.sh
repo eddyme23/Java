@@ -370,25 +370,28 @@ const handleConnection = (clientSocket) => {
     let headerParsed = false;
     let awaitingSplitPayload = false;
     let buffer = '';
-    let isConnectMethod = false;
 
-    const connectAndBridge = (leftoverData, isRawSSH = false) => {
+    const connectAndBridge = (isRawSSH = false, rawSshData = '') => {
         targetSocket = net.connect(TARGET_PORT, TARGET_HOST, () => {
-            // Only send HTTP response headers if it's NOT a raw direct SSH connection
             if (!isRawSSH) {
-                if (isConnectMethod) {
+                // If it's HTTP, send response and DISCARD leftover junk
+                const isConnect = buffer.toUpperCase().startsWith('CONNECT');
+                if (isConnect) {
                     clientSocket.write('HTTP/1.1 200 OK\r\n\r\n');
                 } else {
                     clientSocket.write(
                         'HTTP/1.1 101 Switching Protocols\r\n' +
                         'Upgrade: websocket\r\n' +
-                        'Connection: Upgrade\r\n\r\n'
+                        'Connection: Upgrade\r\n' +
+                        'Sec-WebSocket-Accept: foo\r\n' +
+                        'Content-Length: 104857600000\r\n\r\n'
                     );
                 }
-            }
-            
-            if (leftoverData && leftoverData.length > 0) {
-                targetSocket.write(Buffer.from(leftoverData, 'utf8'));
+            } else {
+                // If it's pure SSH, forward the SSH buffer immediately
+                if (rawSshData.length > 0) {
+                    targetSocket.write(Buffer.from(rawSshData, 'utf8'));
+                }
             }
             
             clientSocket.pipe(targetSocket);
@@ -403,41 +406,40 @@ const handleConnection = (clientSocket) => {
         if (awaitingSplitPayload) {
             awaitingSplitPayload = false;
             clientSocket.removeListener('data', onClientData);
-            connectAndBridge(''); 
+            connectAndBridge(false); // Discard this chunk
             return;
         }
 
         if (!headerParsed) {
             buffer += data.toString('utf8');
 
-            // 1. Check for Direct SSH Handshake (No HTTP Headers)
-            if (buffer.includes('SSH-')) {
+            // 1. Direct SSH Handshake
+            if (buffer.startsWith('SSH-') || buffer.includes('SSH-')) {
                 headerParsed = true;
                 clientSocket.removeListener('data', onClientData);
-                connectAndBridge(buffer, true); // True flag bypasses HTTP headers
+                connectAndBridge(true, buffer); 
                 return;
             }
 
-            // 2. Check for Standard HTTP/WebSocket Payloads
+            // 2. HTTP/WebSocket Payloads
             const headerEndIndex = buffer.indexOf('\r\n\r\n');
             if (headerEndIndex !== -1) {
                 headerParsed = true;
                 const headerString = buffer.substring(0, headerEndIndex);
-                isConnectMethod = headerString.toUpperCase().startsWith('CONNECT');
-                
                 const hasXSplit = /x-split/i.test(headerString);
                 const leftoverData = buffer.substring(headerEndIndex + 4);
 
                 if (hasXSplit) {
                     if (leftoverData.length > 0) {
                         clientSocket.removeListener('data', onClientData);
-                        connectAndBridge('');
+                        connectAndBridge(false);
                     } else {
                         awaitingSplitPayload = true;
                     }
                 } else {
                     clientSocket.removeListener('data', onClientData);
-                    connectAndBridge(leftoverData);
+                    // Crucial: we purposely do NOT pass leftoverData to Dropbear
+                    connectAndBridge(false);
                 }
             }
         }
