@@ -270,8 +270,6 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 PermitRootLogin yes
 MaxSessions 5000
 MaxStartups 500:30:1000
-#MaxSessions 1024
-#MaxStartups 200:30:400
 LoginGraceTime 30
 PubkeyAuthentication yes
 PasswordAuthentication yes
@@ -281,8 +279,6 @@ X11Forwarding yes
 PrintMotd no
 ClientAliveInterval 120
 ClientAliveCountMax 3
-#ClientAliveInterval 300
-#ClientAliveCountMax 2
 UseDNS no
 Banner /etc/zorro-luffy
 LogLevel QUIET
@@ -463,18 +459,30 @@ chmod +x /usr/local/bin/xray
 touch /etc/xray/vless.txt /etc/xray/trojan.txt
 rm -rf /tmp/xray*
 
+# FIXED XRAY CONFIGURATION (NO VMESS, ALPN FIXED, FALLBACKS CLEANED)
 cat <<EOF > /etc/xray/config.json
 {
   "log": { "access": "none", "error": "/var/log/xray/error.log", "loglevel": "error" },
   "inbounds": [
     {
       "port": 443, "protocol": "vless",
-      "settings": { "clients": [], "decryption": "none", "fallbacks": [ { "path": "/trojan", "dest": 10001 }, { "path": "/vless", "dest": 10003 }, { "path": "/xhttp", "dest": 10004 }, { "path": "/httpupgrade", "dest": 10005 }, { "alpn": "h2", "path": "/grpc-svc/TunMulti", "dest": 10006 }, { "dest": 666 } ] },
+      "settings": { "clients": [], "decryption": "none", "fallbacks": [ 
+        { "path": "/trojan", "dest": 10001 }, 
+        { "path": "/vless", "dest": 10003 }, 
+        { "path": "/xhttp", "dest": 10004 }, 
+        { "path": "/httpupgrade", "dest": 10005 }, 
+        { "alpn": "h2", "path": "/grpc-svc", "dest": 10006 }, 
+        { "dest": 666 } 
+      ] },
       "streamSettings": { "network": "tcp", "security": "tls", "tlsSettings": { "alpn": ["h2", "http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] } }
     },
     { "listen": "127.0.0.1", "port": 10001, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan" } } },
     { "port": "80,8080,8880", "protocol": "vless", 
-      "settings": { "clients": [], "decryption": "none", "fallbacks": [ { "path": "/vless", "dest": 10003 }, { "path": "/httpupgrade", "dest": 10005 }, { "dest": 10080 } ] }, 
+      "settings": { "clients": [], "decryption": "none", "fallbacks": [ 
+        { "path": "/vless", "dest": 10003 }, 
+        { "path": "/httpupgrade", "dest": 10005 }, 
+        { "dest": 10080 } 
+      ] }, 
       "streamSettings": { "network": "tcp" } 
     },
     { "listen": "127.0.0.1", "port": 10003, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless" } } },
@@ -505,7 +513,7 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload; systemctl enable xray; systemctl restart xray
 
-# USER EXPIRY CRONJOB FOR XRAY
+# USER EXPIRY CRONJOB FOR XRAY (VMESS REMOVED)
 cat <<'EOF_EXP' > /usr/local/bin/exp-check
 #!/bin/bash
 now=$(date +%Y-%m-%d)
@@ -1385,7 +1393,7 @@ add_xray() {
     echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS\n"
     echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-xHTTP\n"
     echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HTTPUp\n"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
+    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
 
     echo -e "${YELLOW}[ VLESS NTLS (80/8080/8880) ]${NC}\n"
     echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&host=${DOMAIN}&path=%2Fvless#${user}-TCP\n"
@@ -1424,7 +1432,7 @@ add_xray() {
     echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS\n"
     echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-xHTTP\n"
     echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HTTPUp\n"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
+    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
 
     echo -e "${YELLOW}[ VLESS NTLS (80/8080/8880) ]${NC}\n"
     echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&host=${DOMAIN}&path=%2Fvless#${user}-TCP\n"
@@ -1503,7 +1511,7 @@ show_xray() {
     echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS\n"
     echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-xHTTP\n"
     echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HTTPUp\n"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
+    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
 
     echo -e "${YELLOW}[ VLESS NTLS (80) ]${NC}\n"
     echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&host=${DOMAIN}&path=%2Fvless#${user}-TCP\n"
