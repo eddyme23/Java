@@ -18,10 +18,10 @@ case "$ID:$VERSION_ID" in
   *) SUPPORT_LEVEL="unsupported" ;;
 esac
 
-echo "============================================================"
+echo "======================================================================="
 echo "              Guruz GH SSH Script Installer"
 echo "        (Multi-Protocol Edition: SSH/Xray/Hysteria/ZiVPN/UDP Custom)"
-echo "============================================================"
+echo "======================================================================="
 echo ""
 echo "Supported Operating Systems:"
 echo ""
@@ -31,7 +31,7 @@ echo "  ✔ Ubuntu 24.04           (Supported)"
 echo "  ✔ Ubuntu 22.04           (Recommended)"
 echo "  ✔ Ubuntu 20.04           (Legacy Support)"
 echo ""
-echo "============================================================"
+echo "======================================================================="
 sleep 2
 
 if [ "$SUPPORT_LEVEL" = "unsupported" ]; then
@@ -61,7 +61,7 @@ Squid_Port1='3128'
 Squid_Port2='8000'
 
 # Node.js Socks Proxy (Isolated Ports)
-WsPorts=('10080' '25' '2082' '2086')  
+WsPorts=('10080' '2082' '2086')  
 WsPort='10080'  
 
 # SSLH Port
@@ -268,8 +268,10 @@ HostKey /etc/ssh/ssh_host_rsa_key
 HostKey /etc/ssh/ssh_host_ecdsa_key
 HostKey /etc/ssh/ssh_host_ed25519_key
 PermitRootLogin yes
-MaxSessions 1024
-MaxStartups 200:30:400
+MaxSessions 5000
+MaxStartups 500:30:1000
+#MaxSessions 1024
+#MaxStartups 200:30:400
 LoginGraceTime 30
 PubkeyAuthentication yes
 PasswordAuthentication yes
@@ -277,8 +279,10 @@ PermitEmptyPasswords no
 UsePAM yes
 X11Forwarding yes
 PrintMotd no
-ClientAliveInterval 300
-ClientAliveCountMax 2
+ClientAliveInterval 120
+ClientAliveCountMax 3
+#ClientAliveInterval 300
+#ClientAliveCountMax 2
 UseDNS no
 Banner /etc/zorro-luffy
 LogLevel QUIET
@@ -465,12 +469,12 @@ cat <<EOF > /etc/xray/config.json
   "inbounds": [
     {
       "port": 443, "protocol": "vless",
-      "settings": { "clients": [], "decryption": "none", "fallbacks": [ { "path": "/trojan", "dest": 10001 }, { "path": "/vless", "dest": 10003 }, { "path": "/xhttp", "dest": 10004 }, { "path": "/httpupgrade", "dest": 10005 }, { "path": "/grpc-svc/TunMulti", "dest": 10006 }, { "dest": 666 } ] },
+      "settings": { "clients": [], "decryption": "none", "fallbacks": [ { "path": "/trojan", "dest": 10001 }, { "path": "/vless", "dest": 10003 }, { "path": "/xhttp", "dest": 10004 }, { "path": "/httpupgrade", "dest": 10005 }, { "alpn": "h2", "path": "/grpc-svc/TunMulti", "dest": 10006 }, { "dest": 666 } ] },
       "streamSettings": { "network": "tcp", "security": "tls", "tlsSettings": { "alpn": ["h2", "http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] } }
     },
     { "listen": "127.0.0.1", "port": 10001, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan" } } },
     { "port": "80,8080,8880", "protocol": "vless", 
-      "settings": { "clients": [], "decryption": "none", "fallbacks": [ { "path": "/vless", "dest": 10003 }, { "path": "/xhttp", "dest": 10004 }, { "path": "/httpupgrade", "dest": 10005 }, { "path": "/grpc-svc/TunMulti", "dest": 10006 }, { "dest": 10080 } ] }, 
+      "settings": { "clients": [], "decryption": "none", "fallbacks": [ { "path": "/vless", "dest": 10003 }, { "path": "/httpupgrade", "dest": 10005 }, { "dest": 10080 } ] }, 
       "streamSettings": { "network": "tcp" } 
     },
     { "listen": "127.0.0.1", "port": 10003, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless" } } },
@@ -583,7 +587,7 @@ systemctl restart "$NGINX_SERVICE"
 rm -rf /etc/squid/squid.con*
 cat <<'mySquid' > /etc/squid/squid.conf
 acl server dst IP-ADDRESS/32 localhost
-acl ports_ port 14 22 53 21 8081 25 8000 3128 443 80 8080 8880 2082 2086 36712 36717 5667
+acl ports_ port 14 22 53 21 8081 8000 3128 443 80 8080 8880 2082 2086 36712 36717 5667
 http_port Squid_Port1
 http_port Squid_Port2
 http_access allow server
@@ -619,7 +623,7 @@ if check_port STUNNELPORT && systemctl is-active --quiet stunnel4; then clear_fa
 if check_port SSLHPORT && systemctl is-active --quiet sslh; then clear_fail sslh; else restart_after_3_fails sslh sslh "SSLHPORT"; fi
 if check_port SQUIDPORT1 && check_port SQUIDPORT2 && systemctl is-active --quiet squid; then clear_fail squid; else restart_after_3_fails squid squid "SQUIDPORT1,SQUIDPORT2"; fi
 if check_port NGINXPORT && systemctl is-active --quiet nginx; then clear_fail nginx; else restart_after_3_fails nginx nginx "NGINXPORT"; fi
-for port in 10080 25 2082 2086; do if check_port $port && systemctl is-active --quiet ws-proxy@$port; then clear_fail ws-proxy-$port; else restart_after_3_fails ws-proxy-$port ws-proxy@$port "$port"; fi; done
+for port in 10080 2082 2086; do if check_port $port && systemctl is-active --quiet ws-proxy@$port; then clear_fail ws-proxy-$port; else restart_after_3_fails ws-proxy-$port ws-proxy@$port "$port"; fi; done
 if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "443, 80"; fi
 if systemctl is-active --quiet hysteria-server; then clear_fail hysteria-server; else restart_after_3_fails hysteria-server hysteria-server "UDP"; fi
 if systemctl is-active --quiet udp-custom; then clear_fail udp-custom; else restart_after_3_fails udp-custom udp-custom "UDP"; fi
@@ -1376,19 +1380,17 @@ add_xray() {
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "Username : $user\nExpiry   : $exp\n"
     
-    echo -e "${YELLOW}[ TLS (443) ]${NC}"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none#${user}-TCP"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
-    echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&mode=auto#${user}-xHTTP"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}#${user}-HTTPUp"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&host=${DOMAIN}&sni=${DOMAIN}#${user}-gRPC"
+    echo -e "${YELLOW}[ VLESS TLS (443) ]${NC}\n"
+    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&host=${DOMAIN}&path=%2Fvless&allowInsecure=1#${user}-TCP\n"
+    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS\n"
+    echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-xHTTP\n"
+    echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HTTPUp\n"
+    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
 
-    echo -e "\n${YELLOW}[ NTLS (80/8080/8880) ]${NC}"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none#${user}-TCP"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}-WS"
-    echo -e "XHT: vless://${uuid}@${DOMAIN}:80?type=xhttp&security=none&encryption=none&path=%2Fxhttp&host=${DOMAIN}&mode=auto#${user}-xHTTP"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}#${user}-HTTPUp"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:80?type=grpc&security=none&encryption=none&serviceName=grpc-svc&host=${DOMAIN}#${user}-gRPC"
+    echo -e "${YELLOW}[ VLESS NTLS (80/8080/8880) ]${NC}\n"
+    echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&host=${DOMAIN}&path=%2Fvless#${user}-TCP\n"
+    echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}-WS\n"
+    echo -e "HUP: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}#${user}-HTTPUp\n"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   
   elif [ "$prot" == "2" ]; then
@@ -1399,8 +1401,9 @@ add_xray() {
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "                   ${BOLD}TROJAN ACCOUNT CREATED${NC}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "Username: $user\nPassword: $pass\nExpiry: $exp"
-    echo -e "\n${YELLOW}TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "Username: $user\nPassword: $pass\nExpiry: $exp\n"
+    echo -e "${YELLOW}[ TROJAN TLS (443) ]${NC}\n"
+    echo -e "trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
 
   elif [ "$prot" == "3" ]; then
@@ -1413,15 +1416,23 @@ add_xray() {
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
     echo -e "               ${BOLD}ALL-IN-ONE ACCOUNT CREATED${NC}"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "Username: $user\nExpiry:   $exp"
-    echo -e "${CYAN}--------------------------------------------------------------${NC}"
+    echo -e "Username: $user\nExpiry:   $exp\n"
+    echo -e "${CYAN}--------------------------------------------------------------${NC}\n"
     
-    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none#${user}-TCP"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
-    echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&mode=auto#${user}-xHTTP"
-    
-    echo -e "\n${YELLOW}[ TROJAN TLS (443) ]${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}"
+    echo -e "${YELLOW}[ VLESS TLS (443) ]${NC}\n"
+    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&host=${DOMAIN}&path=%2Fvless&allowInsecure=1#${user}-TCP\n"
+    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS\n"
+    echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-xHTTP\n"
+    echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HTTPUp\n"
+    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
+
+    echo -e "${YELLOW}[ VLESS NTLS (80/8080/8880) ]${NC}\n"
+    echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&host=${DOMAIN}&path=%2Fvless#${user}-TCP\n"
+    echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}-WS\n"
+    echo -e "HUP: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}#${user}-HTTPUp\n"
+
+    echo -e "${YELLOW}[ TROJAN TLS (443) ]${NC}\n"
+    echo -e "trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
     echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   fi
   systemctl restart xray
@@ -1487,24 +1498,23 @@ show_xray() {
   local found=0
   if grep -qw "^$user" /etc/xray/vless.txt; then
     uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
-    echo -e "${YELLOW}[ VLESS TLS (443) ]${NC}"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none#${user}-TCP"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS"
-    echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&mode=auto#${user}-xHTTP"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}#${user}-HTTPUp"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&host=${DOMAIN}&sni=${DOMAIN}#${user}-gRPC\n"
+    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}\n"
+    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&host=${DOMAIN}&path=%2Fvless&allowInsecure=1#${user}-TCP\n"
+    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS\n"
+    echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-xHTTP\n"
+    echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HTTPUp\n"
+    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
 
-    echo -e "${YELLOW}[ VLESS NTLS (80) ]${NC}"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none#${user}-TCP"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}-WS"
-    echo -e "XHT: vless://${uuid}@${DOMAIN}:80?type=xhttp&security=none&encryption=none&path=%2Fxhttp&host=${DOMAIN}&mode=auto#${user}-xHTTP"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}#${user}-HTTPUp"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:80?type=grpc&security=none&encryption=none&serviceName=grpc-svc&host=${DOMAIN}#${user}-gRPC\n"
+    echo -e "${YELLOW}[ VLESS NTLS (80) ]${NC}\n"
+    echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&host=${DOMAIN}&path=%2Fvless#${user}-TCP\n"
+    echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}-WS\n"
+    echo -e "HUP: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}#${user}-HTTPUp\n"
     found=1
   fi
   if grep -qw "^$user" /etc/xray/trojan.txt; then
     pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
-    echo -e "${YELLOW}TROJAN TLS (443):${NC}\ntrojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
+    echo -e "${YELLOW}[ TROJAN TLS (443) ]${NC}\n"
+    echo -e "trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
     found=1
   fi
   if [ "$found" -eq 0 ]; then echo -e "${RED}User not found in any protocol.${NC}"; fi
@@ -1562,7 +1572,7 @@ create_user() {
   echo -e "  Dropbear   : 80"
   echo -e "  SSL/TLS    : 443"
   echo -e "  SSL/WS     : 443"
-  echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086, 25"
+  echo -e "  WebSocket  : 80, 8080, 8880, 2082, 2086"
   echo -e "  SlowDNS    : 53"
   echo -e "  UDP Custom : 1-65535"
   echo -e "${CYAN}--------------------------------------------------------------${NC}"
@@ -1692,9 +1702,9 @@ service_control_menu() {
     echo -e "  [${YELLOW}00${NC}] Back\n"
     read -rp "  Select an option: " opt
     case "$opt" in
-      1|01) restart_service "ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray" "All Services"; pause_return ;;
+      1|01) restart_service "ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn ws-proxy@10080 ws-proxy@2082 ws-proxy@2086 xray" "All Services"; pause_return ;;
       2|02) restart_service "ssh dropbear" "SSH & Dropbear"; pause_return ;;
-      3|03) restart_service "ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086" "Node WebSocket Proxies"; pause_return ;;
+      3|03) restart_service "ws-proxy@10080 ws-proxy@2082 ws-proxy@2086" "Node WebSocket Proxies"; pause_return ;;
       4|04) restart_service "stunnel4 xray" "Stunnel & Xray Core"; pause_return ;;
       5|05) restart_service "squid nginx" "Squid Proxy & Nginx"; pause_return ;;
       6|06) restart_service "server-sldns hysteria-server badvpn udp-custom zivpn" "UDP Core Services"; pause_return ;;
@@ -1730,7 +1740,7 @@ restore_snapshot() {
   if [ -n "${backups[$idx]}" ]; then
     echo -e "\nRestoring ${YELLOW}$(basename "${backups[$idx]}")${NC}..."
     tar -xzf "${backups[$idx]}" -C /
-    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn ws-proxy@10080 ws-proxy@25 ws-proxy@2082 ws-proxy@2086 xray 2>/dev/null || true
+    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn ws-proxy@10080 ws-proxy@2082 ws-proxy@2086 xray 2>/dev/null || true
     echo -e "${GREEN}✔ Restore complete!${NC}"
   else echo -e "${RED}Invalid selection.${NC}"; fi
   pause_return
@@ -1888,7 +1898,7 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "Dropbear:" "80" "WEB-Nginx:" "85"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SSL:" "443" "SSL/PYTHON:" "443"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "80, 8080, 8880" "Squid:" "3128, 8000"
-  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086, 25" "BadVPN:" "7300"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086" "BadVPN:" "7300"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "UDPCustom:" "1-65535" "ZiVPN:" "6000-19999"
