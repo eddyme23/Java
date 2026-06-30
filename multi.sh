@@ -91,6 +91,38 @@ fi
 
 export OBFS PASSWORD
 
+# Xray extended protocols (Hiddify-style, no VMess)
+XRAY_KCP_PORT="16888"
+XRAY_KCP_SEED="GuruzKCP"
+XRAY_SS_PORT="8388"
+XRAY_SS_METHOD="2022-blake3-aes-256-gcm"
+
+_default_reality_tcp_sni="www.microsoft.com"
+_default_reality_grpc_sni="www.apple.com"
+_default_reality_xhttp_sni="www.samsung.com"
+
+if [ -t 0 ]; then
+  read -e -p "REALITY TCP camouflage SNI [${_default_reality_tcp_sni}]: " -i "${_default_reality_tcp_sni}" _r_tcp
+  read -e -p "REALITY gRPC camouflage SNI [${_default_reality_grpc_sni}]: " -i "${_default_reality_grpc_sni}" _r_grpc
+  read -e -p "REALITY XHTTP camouflage SNI [${_default_reality_xhttp_sni}]: " -i "${_default_reality_xhttp_sni}" _r_xhttp
+  REALITY_TCP_SNI="${_r_tcp:-${_default_reality_tcp_sni}}"
+  REALITY_GRPC_SNI="${_r_grpc:-${_default_reality_grpc_sni}}"
+  REALITY_XHTTP_SNI="${_r_xhttp:-${_default_reality_xhttp_sni}}"
+else
+  REALITY_TCP_SNI="${REALITY_TCP_SNI:-${_default_reality_tcp_sni}}"
+  REALITY_GRPC_SNI="${REALITY_GRPC_SNI:-${_default_reality_grpc_sni}}"
+  REALITY_XHTTP_SNI="${REALITY_XHTTP_SNI:-${_default_reality_xhttp_sni}}"
+fi
+
+if [ "$REALITY_TCP_SNI" = "$REALITY_GRPC_SNI" ] || \
+   [ "$REALITY_TCP_SNI" = "$REALITY_XHTTP_SNI" ] || \
+   [ "$REALITY_GRPC_SNI" = "$REALITY_XHTTP_SNI" ]; then
+  echo "REALITY TCP, gRPC and XHTTP SNI values must be different so HAProxy can route them on port 443."
+  exit 1
+fi
+
+export REALITY_TCP_SNI REALITY_GRPC_SNI REALITY_XHTTP_SNI
+
 # WebServer Ports
 Nginx_Port='85' 
 
@@ -120,7 +152,7 @@ apt-get update -y && apt-get upgrade -y --with-new-pkgs
 systemctl stop systemd-resolved 2>/dev/null
 systemctl disable systemd-resolved 2>/dev/null
 
-SSH_SERVICE="ssh"; DROPBEAR_SERVICE="dropbear"; STUNNEL_SERVICE="stunnel4"; SQUID_SERVICE="squid"; SSLH_SERVICE="sslh"; NGINX_SERVICE="nginx"; SFTP_SUBSYSTEM="internal-sftp"
+SSH_SERVICE="ssh"; DROPBEAR_SERVICE="dropbear"; STUNNEL_SERVICE="stunnel4"; SQUID_SERVICE="squid"; SSLH_SERVICE="sslh"; NGINX_SERVICE="nginx"; HAPROXY_SERVICE="haproxy"; SFTP_SUBSYSTEM="internal-sftp"
 
 mkdir -p /etc/dropbear /etc/stunnel /etc/nginx/conf.d /etc/deekayvpn /var/run/sslh /etc/xray
 echo "$DOMAIN" > /etc/deekayvpn/domain.txt
@@ -142,7 +174,7 @@ PACKAGE_LIST=(
   neofetch sslh dnsutils stunnel4 squid dropbear nano sudo wget unzip tar zip gzip
   iptables iptables-persistent netfilter-persistent bc cron dos2unix whois screen ruby
   apt-transport-https software-properties-common gnupg2 ca-certificates curl net-tools 
-  nginx certbot jq figlet git gcc make build-essential perl expect libdbi-perl vnstat socat
+  nginx haproxy certbot jq figlet git gcc make build-essential perl expect libdbi-perl vnstat socat openssl
   libnet-ssleay-perl libauthen-pam-perl libio-pty-perl apt-show-versions openssh-server rsyslog lsof procps
 )
 
@@ -450,51 +482,326 @@ systemctl daemon-reload
 for port in "${WsPorts[@]}"; do systemctl enable ws-proxy@$port; systemctl restart ws-proxy@$port; done
 
 # === XRAY CORE ===
-echo "Installing Stable Xray Core v26.5.9..."
-XRAY_VER="v26.5.9"
+echo "Installing Hiddify-aligned stable Xray Core v26.3.27..."
+XRAY_VER="v26.3.27"
 wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip"
 unzip -q -o /tmp/xray.zip -d /tmp/xray/
 mv -f /tmp/xray/xray /usr/local/bin/xray
 chmod +x /usr/local/bin/xray
-touch /etc/xray/vless.txt /etc/xray/trojan.txt
 rm -rf /tmp/xray*
 
+touch /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt
+chmod 600 /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt
+
+# Generate one REALITY X25519 key pair. Three distinct SNI values allow
+# TCP, gRPC and XHTTP REALITY to share public port 443 through HAProxy.
+REALITY_KEY_OUTPUT=$(/usr/local/bin/xray x25519 2>/dev/null || true)
+REALITY_PRIVATE_KEY=$(printf '%s\n' "$REALITY_KEY_OUTPUT" | awk -F': *' 'tolower($1) ~ /private/ {print $2; exit}')
+REALITY_PUBLIC_KEY=$(printf '%s\n' "$REALITY_KEY_OUTPUT" | awk -F': *' 'tolower($1) ~ /(public|password)/ {print $2; exit}')
+if [ -z "$REALITY_PRIVATE_KEY" ]; then
+  echo "Unable to generate the REALITY private key with Xray."
+  exit 1
+fi
+if [ -z "$REALITY_PUBLIC_KEY" ]; then
+  REALITY_PUBLIC_KEY=$(/usr/local/bin/xray x25519 -i "$REALITY_PRIVATE_KEY" 2>/dev/null | awk -F': *' 'tolower($1) ~ /(public|password)/ {print $2; exit}')
+fi
+if [ -z "$REALITY_PUBLIC_KEY" ]; then
+  echo "Unable to derive the REALITY client public key/password."
+  exit 1
+fi
+
+REALITY_TCP_SID=$(openssl rand -hex 8)
+REALITY_GRPC_SID=$(openssl rand -hex 8)
+REALITY_XHTTP_SID=$(openssl rand -hex 8)
+SS_MASTER_KEY=$(openssl rand -base64 32 | tr -d '\n')
+
+{
+  printf 'REALITY_PRIVATE_KEY=%q\n' "$REALITY_PRIVATE_KEY"
+  printf 'REALITY_PUBLIC_KEY=%q\n' "$REALITY_PUBLIC_KEY"
+  printf 'REALITY_TCP_SNI=%q\n' "$REALITY_TCP_SNI"
+  printf 'REALITY_GRPC_SNI=%q\n' "$REALITY_GRPC_SNI"
+  printf 'REALITY_XHTTP_SNI=%q\n' "$REALITY_XHTTP_SNI"
+  printf 'REALITY_TCP_SID=%q\n' "$REALITY_TCP_SID"
+  printf 'REALITY_GRPC_SID=%q\n' "$REALITY_GRPC_SID"
+  printf 'REALITY_XHTTP_SID=%q\n' "$REALITY_XHTTP_SID"
+  printf 'XRAY_KCP_PORT=%q\n' "$XRAY_KCP_PORT"
+  printf 'XRAY_KCP_SEED=%q\n' "$XRAY_KCP_SEED"
+  printf 'XRAY_SS_PORT=%q\n' "$XRAY_SS_PORT"
+  printf 'XRAY_SS_METHOD=%q\n' "$XRAY_SS_METHOD"
+  printf 'SS_MASTER_KEY=%q\n' "$SS_MASTER_KEY"
+} > /etc/xray/server.env
+chmod 600 /etc/xray/server.env
+
 # XRAY CONFIGURATION
+# Normal TLS, VLESS/Trojan transports and legacy SSH-over-TLS share 443
+# through HAProxy. REALITY remains end-to-end encrypted and is routed by SNI.
 cat <<EOF > /etc/xray/config.json
 {
   "log": { "access": "none", "error": "/var/log/xray/error.log", "loglevel": "error" },
   "inbounds": [
     {
-      "port": 443, "protocol": "vless",
-      "settings": { "clients": [], "decryption": "none", "fallbacks": [ 
-        { "path": "/trojan", "dest": 10001 }, 
-        { "path": "/vless", "dest": 10003 }, 
-        { "path": "/xhttp", "dest": 10004 }, 
-        { "path": "/httpupgrade", "dest": 10005 }, 
-        { "alpn": "h2", "path": "/grpc-svc", "dest": 10006 }, 
-        { "dest": 666 } 
-      ] },
-      "streamSettings": { "network": "tcp", "security": "tls", "tlsSettings": { "alpn": ["h2", "http/1.1"], "certificates": [ { "certificateFile": "/etc/xray/xray.crt", "keyFile": "/etc/xray/xray.key" } ] } }
+      "tag": "vless-legacy-raw",
+      "listen": "127.0.0.1",
+      "port": 10443,
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none",
+        "tcpSettings": { "header": { "type": "none" } },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
     },
-    { "listen": "127.0.0.1", "port": 10001, "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan" } } },
-    { "port": "80,8080,8880", "protocol": "vless", 
-      "settings": { "clients": [], "decryption": "none", "fallbacks": [ 
-        { "path": "/vless", "dest": 10003 }, 
-        { "path": "/httpupgrade", "dest": 10005 }, 
-        { "dest": 10080 } 
-      ] }, 
-      "streamSettings": { "network": "tcp" } 
+    {
+      "tag": "vless-tcp-http",
+      "listen": "127.0.0.1",
+      "port": 10007,
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none",
+        "tcpSettings": { "header": { "type": "http", "request": { "path": ["/vless-tcp"] } } },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
     },
-    { "listen": "127.0.0.1", "port": 10003, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless" } } },
-    { "listen": "127.0.0.1", "port": 10004, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/xhttp", "mode": "auto" } } },
-    { "listen": "127.0.0.1", "port": 10005, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "httpupgrade", "httpupgradeSettings": { "path": "/httpupgrade", "host": "" } } },
-    { "listen": "127.0.0.1", "port": 10006, "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "grpc", "grpcSettings": { "serviceName": "grpc-svc" } } }
+    {
+      "tag": "vless-plain-public",
+      "port": "80,8080,8880",
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none",
+        "fallbacks": [
+          { "path": "/vless", "dest": 10003, "xver": 2 },
+          { "path": "/httpupgrade", "dest": 10005, "xver": 2 },
+          { "dest": 10080 }
+        ]
+      },
+      "streamSettings": { "network": "tcp", "security": "none" }
+    },
+    {
+      "tag": "vless-ws",
+      "listen": "127.0.0.1",
+      "port": 10003,
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": { "path": "/vless" },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "vless-xhttp",
+      "listen": "127.0.0.1",
+      "port": 10004,
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": { "path": "/xhttp", "mode": "auto" },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "vless-httpupgrade",
+      "listen": "127.0.0.1",
+      "port": 10005,
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "security": "none",
+        "httpupgradeSettings": { "path": "/httpupgrade", "host": "" },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "vless-grpc",
+      "listen": "127.0.0.1",
+      "port": 10006,
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "none",
+        "grpcSettings": { "serviceName": "grpc-svc" },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "trojan-tcp-http",
+      "listen": "127.0.0.1",
+      "port": 10107,
+      "protocol": "trojan",
+      "settings": { "clients": [] },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none",
+        "tcpSettings": { "header": { "type": "http", "request": { "path": ["/trojan-tcp"] } } },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "trojan-ws",
+      "listen": "127.0.0.1",
+      "port": 10101,
+      "protocol": "trojan",
+      "settings": { "clients": [] },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": { "path": "/trojan" },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "trojan-xhttp",
+      "listen": "127.0.0.1",
+      "port": 10104,
+      "protocol": "trojan",
+      "settings": { "clients": [] },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": { "path": "/trojan-xhttp", "mode": "auto" },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "trojan-httpupgrade",
+      "listen": "127.0.0.1",
+      "port": 10105,
+      "protocol": "trojan",
+      "settings": { "clients": [] },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "security": "none",
+        "httpupgradeSettings": { "path": "/trojan-httpupgrade", "host": "" },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "trojan-grpc",
+      "listen": "127.0.0.1",
+      "port": 10106,
+      "protocol": "trojan",
+      "settings": { "clients": [] },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "none",
+        "grpcSettings": { "serviceName": "trojan-grpc" },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "vless-reality-tcp",
+      "listen": "127.0.0.1",
+      "port": 11001,
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "target": "${REALITY_TCP_SNI}:443",
+          "xver": 0,
+          "serverNames": ["${REALITY_TCP_SNI}"],
+          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "shortIds": ["${REALITY_TCP_SID}"]
+        },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "vless-reality-grpc",
+      "listen": "127.0.0.1",
+      "port": 11002,
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "reality",
+        "grpcSettings": { "serviceName": "reality-grpc" },
+        "realitySettings": {
+          "show": false,
+          "target": "${REALITY_GRPC_SNI}:443",
+          "xver": 0,
+          "serverNames": ["${REALITY_GRPC_SNI}"],
+          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "shortIds": ["${REALITY_GRPC_SID}"]
+        },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "vless-reality-xhttp",
+      "listen": "127.0.0.1",
+      "port": 11003,
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "reality",
+        "xhttpSettings": { "path": "/reality-xhttp", "mode": "auto" },
+        "realitySettings": {
+          "show": false,
+          "target": "${REALITY_XHTTP_SNI}:443",
+          "xver": 0,
+          "serverNames": ["${REALITY_XHTTP_SNI}"],
+          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "shortIds": ["${REALITY_XHTTP_SID}"]
+        },
+        "sockopt": { "acceptProxyProtocol": true, "tcpFastOpen": true }
+      }
+    },
+    {
+      "tag": "vless-mkcp",
+      "listen": "0.0.0.0",
+      "port": ${XRAY_KCP_PORT},
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "kcp",
+        "security": "none",
+        "kcpSettings": {
+          "seed": "${XRAY_KCP_SEED}",
+          "congestion": true,
+          "uplinkCapacity": 100,
+          "downlinkCapacity": 100
+        }
+      }
+    },
+    {
+      "tag": "shadowsocks-2022",
+      "listen": "0.0.0.0",
+      "port": ${XRAY_SS_PORT},
+      "protocol": "shadowsocks",
+      "settings": {
+        "network": "tcp,udp",
+        "method": "${XRAY_SS_METHOD}",
+        "password": "${SS_MASTER_KEY}",
+        "users": []
+      }
+    }
   ],
-  "outbounds": [ { "protocol": "freedom", "settings": {} }, { "protocol": "blackhole", "settings": {}, "tag": "blocked" } ]
+  "outbounds": [
+    { "protocol": "freedom", "settings": {} },
+    { "protocol": "blackhole", "settings": {}, "tag": "blocked" }
+  ]
 }
 EOF
 
 mkdir -p /var/log/xray
+if ! /usr/local/bin/xray run -test -config /etc/xray/config.json; then
+  echo "Xray configuration validation failed."
+  exit 1
+fi
+
 cat <<EOF > /etc/systemd/system/xray.service
 [Unit]
 Description=Xray Service
@@ -506,30 +813,210 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
 Restart=on-failure
+RestartSec=2
 LimitNPROC=10000
 LimitNOFILE=1000000
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl daemon-reload; systemctl enable xray; systemctl restart xray
+systemctl daemon-reload
+systemctl enable xray
+systemctl restart xray
+
+# === HIDDIFY-STYLE SHARED PORT 443 ===
+# Stage 1 inspects encrypted ClientHello SNI. REALITY is passed through to
+# Xray unchanged. Normal traffic is sent to the TLS-terminating frontend.
+mkdir -p /etc/haproxy/certs
+install -m 600 /etc/stunnel/stunnel.pem /etc/haproxy/certs/xray.pem
+cat <<EOF_HAPROXY > /etc/haproxy/haproxy.cfg
+global
+    log /dev/log local0
+    maxconn 100000
+    daemon
+
+defaults
+    log global
+    mode tcp
+    option dontlognull
+    timeout connect 5s
+    timeout client 1h
+    timeout client-fin 1h
+    timeout server 1h
+    timeout tunnel 1h
+    timeout http-request 15s
+
+frontend public_sni_443
+    bind :443 v4v6 tfo
+    mode tcp
+    tcp-request inspect-delay 5s
+    tcp-request content accept if { req.ssl_hello_type 1 }
+
+    acl reality_tcp_sni req.ssl_sni -i ${REALITY_TCP_SNI}
+    acl reality_grpc_sni req.ssl_sni -i ${REALITY_GRPC_SNI}
+    acl reality_xhttp_sni req.ssl_sni -i ${REALITY_XHTTP_SNI}
+
+    use_backend reality_tcp_passthrough if reality_tcp_sni
+    use_backend reality_grpc_passthrough if reality_grpc_sni
+    use_backend reality_xhttp_passthrough if reality_xhttp_sni
+    default_backend normal_tls_entry
+
+backend normal_tls_entry
+    server local_tls 127.0.0.1:10445 send-proxy-v2 tfo
+
+backend reality_tcp_passthrough
+    server xray 127.0.0.1:11001 send-proxy-v2 tfo
+
+backend reality_grpc_passthrough
+    server xray 127.0.0.1:11002 send-proxy-v2 tfo
+
+backend reality_xhttp_passthrough
+    server xray 127.0.0.1:11003 send-proxy-v2 tfo
+
+frontend normal_tls_terminator
+    bind 127.0.0.1:10445 accept-proxy ssl crt /etc/haproxy/certs/xray.pem alpn h2,http/1.1
+    mode tcp
+    acl negotiated_h2 ssl_fc_alpn -i h2
+    acl h2_preface req.payload(0,24) -m bin 505249202a20485454502f322e300d0a0d0a534d0d0a0d0a
+    tcp-request inspect-delay 5s
+    tcp-request content accept if HTTP
+    tcp-request content accept if h2_preface
+    use_backend h2_dispatch if negotiated_h2 h2_preface
+
+    # HTTP/1.1 path-based transports. Specific Trojan paths must be checked
+    # before the legacy /trojan WebSocket path.
+    use_backend trojan_xhttp_h1 if { path_beg /trojan-xhttp }
+    use_backend trojan_httpupgrade if { path_beg /trojan-httpupgrade }
+    use_backend trojan_tcp_http if { path_beg /trojan-tcp }
+    use_backend vless_xhttp_h1 if { path_beg /xhttp }
+    use_backend vless_httpupgrade if { path_beg /httpupgrade }
+    use_backend vless_tcp_http if { path_beg /vless-tcp }
+    use_backend trojan_ws if { path -i /trojan }
+    use_backend vless_ws if { path -i /vless }
+
+    acl clear_ssh req.payload(0,4) -m str SSH-
+    use_backend sslh_clear if clear_ssh
+    use_backend sslh_clear if HTTP
+
+    # Backward compatibility for existing raw VLESS TCP clients.
+    default_backend vless_legacy_raw
+
+backend h2_dispatch
+    server h2_router 127.0.0.1:10444 send-proxy-v2
+
+frontend h2_router
+    bind 127.0.0.1:10444 accept-proxy
+    mode http
+
+    use_backend trojan_grpc_h2 if { path_beg /trojan-grpc }
+    use_backend vless_grpc_h2 if { path_beg /grpc-svc }
+    use_backend trojan_xhttp_h2 if { path_beg /trojan-xhttp }
+    use_backend vless_xhttp_h2 if { path_beg /xhttp }
+    default_backend reject_h2
+
+backend vless_legacy_raw
+    server xray 127.0.0.1:10443 send-proxy-v2
+
+backend vless_tcp_http
+    server xray 127.0.0.1:10007 send-proxy-v2
+
+backend vless_ws
+    server xray 127.0.0.1:10003 send-proxy-v2
+
+backend vless_httpupgrade
+    server xray 127.0.0.1:10005 send-proxy-v2
+
+backend vless_xhttp_h1
+    server xray 127.0.0.1:10004 send-proxy-v2
+
+backend vless_xhttp_h2
+    mode http
+    server xray 127.0.0.1:10004 send-proxy-v2 proto h2
+
+backend vless_grpc_h2
+    mode http
+    server xray 127.0.0.1:10006 send-proxy-v2 proto h2
+
+backend trojan_tcp_http
+    server xray 127.0.0.1:10107 send-proxy-v2
+
+backend trojan_ws
+    server xray 127.0.0.1:10101 send-proxy-v2
+
+backend trojan_httpupgrade
+    server xray 127.0.0.1:10105 send-proxy-v2
+
+backend trojan_xhttp_h1
+    server xray 127.0.0.1:10104 send-proxy-v2
+
+backend trojan_xhttp_h2
+    mode http
+    server xray 127.0.0.1:10104 send-proxy-v2 proto h2
+
+backend trojan_grpc_h2
+    mode http
+    server xray 127.0.0.1:10106 send-proxy-v2 proto h2
+
+backend sslh_clear
+    server sslh 127.0.0.1:666
+
+backend reject_h2
+    mode http
+    http-request return status 404
+EOF_HAPROXY
+
+if ! haproxy -c -f /etc/haproxy/haproxy.cfg; then
+  echo "HAProxy configuration validation failed."
+  exit 1
+fi
+
+mkdir -p /etc/systemd/system/haproxy.service.d
+cat <<'EOF_HAPROXY_UNIT' > /etc/systemd/system/haproxy.service.d/xray-order.conf
+[Unit]
+After=xray.service network-online.target
+Wants=xray.service network-online.target
+EOF_HAPROXY_UNIT
+systemctl daemon-reload
+systemctl enable "$HAPROXY_SERVICE"
+systemctl restart "$HAPROXY_SERVICE"
+
+# UDP exceptions must precede ZiVPN/Hysteria range DNAT rules.
+iptables -t nat -C PREROUTING -p udp --dport "$XRAY_KCP_PORT" -j ACCEPT 2>/dev/null || iptables -t nat -I PREROUTING 1 -p udp --dport "$XRAY_KCP_PORT" -j ACCEPT
+iptables -t nat -C PREROUTING -p udp --dport "$XRAY_SS_PORT" -j ACCEPT 2>/dev/null || iptables -t nat -I PREROUTING 1 -p udp --dport "$XRAY_SS_PORT" -j ACCEPT
+iptables -C INPUT -p udp --dport "$XRAY_KCP_PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport "$XRAY_KCP_PORT" -j ACCEPT
+iptables -C INPUT -p udp --dport "$XRAY_SS_PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport "$XRAY_SS_PORT" -j ACCEPT
+iptables -C INPUT -p tcp --dport "$XRAY_SS_PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$XRAY_SS_PORT" -j ACCEPT
 
 # USER EXPIRY CRONJOB FOR XRAY
 cat <<'EOF_EXP' > /usr/local/bin/exp-check
 #!/bin/bash
+set -o pipefail
 now=$(date +%Y-%m-%d)
-for proto in vless trojan; do
-  if [ -f "/etc/xray/${proto}.txt" ]; then
-    data=( $(cat /etc/xray/${proto}.txt | awk '{print $1}') )
-    for user in "${data[@]}"; do
-      exp=$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $3}')
-      if [[ "$now" > "$exp" ]]; then
-        jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
-        sed -i "/^$user /d" /etc/xray/${proto}.txt
-      fi
-    done
-  fi
+CONFIG="/etc/xray/config.json"
+changed=0
+
+for proto in vless trojan shadowsocks; do
+  db="/etc/xray/${proto}.txt"
+  [ -f "$db" ] || continue
+  mapfile -t expired_users < <(awk -v d="$now" '$3 < d {print $1}' "$db")
+  for user in "${expired_users[@]}"; do
+    jq --arg user "$user" '
+      (.inbounds[] | select(((.settings.clients? // null) | type) == "array") | .settings.clients) |= map(select(.email != $user)) |
+      (.inbounds[] | select(((.settings.users? // null) | type) == "array") | .settings.users) |= map(select(.email != $user))
+    ' "$CONFIG" > /tmp/xray-exp.json || exit 1
+    mv /tmp/xray-exp.json "$CONFIG"
+    sed -i "/^${user} /d" "$db"
+    changed=1
+  done
 done
-systemctl restart xray
+
+if [ "$changed" -eq 1 ]; then
+  if /usr/local/bin/xray run -test -config "$CONFIG" >/dev/null 2>&1; then
+    systemctl restart xray
+  else
+    logger -t xray-exp "Refusing to restart: generated Xray config failed validation"
+    exit 1
+  fi
+fi
 EOF_EXP
 chmod +x /usr/local/bin/exp-check
 echo "0 0 * * * root /usr/local/bin/exp-check >/dev/null 2>&1" > /etc/cron.d/xray-expiry
@@ -595,7 +1082,7 @@ systemctl restart "$NGINX_SERVICE"
 rm -rf /etc/squid/squid.con*
 cat <<'mySquid' > /etc/squid/squid.conf
 acl server dst IP-ADDRESS/32 localhost
-acl ports_ port 14 22 53 21 8081 8000 3128 443 80 8080 8880 2082 2086 36712 36717 5667
+acl ports_ port 14 22 53 21 8081 8000 3128 443 80 8080 8880 2082 2086 8388 16888 36712 36717 5667
 http_port Squid_Port1
 http_port Squid_Port2
 http_access allow server
@@ -615,6 +1102,7 @@ send_telegram_message() { curl -s --max-time 10 --retry 5 --retry-delay 2 --retr
 server_ip="IPADDRESS"; datenow=$(date +"%Y-%m-%d %T"); IPCOUNTRY=$(curl -s "https://freeipapi.com/api/json/${server_ip}" | jq -r '.countryName')
 STATE_DIR="/etc/deekayvpn/health"
 check_port() { ss -lnt | awk '{print $4}' | grep -q ":$1$"; }
+check_udp_port() { ss -lnu | awk '{print $5}' | grep -q ":$1$"; }
 mark_fail() { local f="$STATE_DIR/$1.fail"; local n=0; [ -f "$f" ] && n=$(cat "$f"); n=$((n+1)); echo "$n" > "$f"; echo "$n"; }
 clear_fail() { rm -f "$STATE_DIR/$1.fail"; }
 restart_after_3_fails() {
@@ -632,7 +1120,8 @@ if check_port SSLHPORT && systemctl is-active --quiet sslh; then clear_fail sslh
 if check_port SQUIDPORT1 && check_port SQUIDPORT2 && systemctl is-active --quiet squid; then clear_fail squid; else restart_after_3_fails squid squid "SQUIDPORT1,SQUIDPORT2"; fi
 if check_port NGINXPORT && systemctl is-active --quiet nginx; then clear_fail nginx; else restart_after_3_fails nginx nginx "NGINXPORT"; fi
 for port in 10080 2082 2086; do if check_port $port && systemctl is-active --quiet ws-proxy@$port; then clear_fail ws-proxy-$port; else restart_after_3_fails ws-proxy-$port ws-proxy@$port "$port"; fi; done
-if check_port 443 && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "443, 80"; fi
+if check_port 443 && systemctl is-active --quiet haproxy; then clear_fail haproxy; else restart_after_3_fails haproxy haproxy "443"; fi
+if check_port 10443 && check_port 10003 && check_port 10004 && check_port 10006 && check_port 10101 && check_port 10104 && check_port 10106 && check_port 11001 && check_port 11002 && check_port 11003 && check_port XRAYSSPORT && check_udp_port XRAYSSPORT && check_udp_port XRAYKCPPORT && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "TLS transports, REALITY, SS, mKCP"; fi
 if systemctl is-active --quiet hysteria-server; then clear_fail hysteria-server; else restart_after_3_fails hysteria-server hysteria-server "UDP"; fi
 if systemctl is-active --quiet udp-custom; then clear_fail udp-custom; else restart_after_3_fails udp-custom udp-custom "UDP"; fi
 if systemctl is-active --quiet zivpn; then clear_fail zivpn; else restart_after_3_fails zivpn zivpn "UDP"; fi
@@ -649,6 +1138,8 @@ sed -i "s|SSLHPORT|$MainPort|g" /etc/deekayvpn/service_checker.sh
 sed -i "s|SQUIDPORT1|$Squid_Port1|g" /etc/deekayvpn/service_checker.sh
 sed -i "s|SQUIDPORT2|$Squid_Port2|g" /etc/deekayvpn/service_checker.sh
 sed -i "s|NGINXPORT|$Nginx_Port|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|XRAYSSPORT|$XRAY_SS_PORT|g" /etc/deekayvpn/service_checker.sh
+sed -i "s|XRAYKCPPORT|$XRAY_KCP_PORT|g" /etc/deekayvpn/service_checker.sh
 sed -i "s|SSHPORT1|$SSH_Port1|g" /etc/deekayvpn/service_checker.sh
 sed -i "s|SSHPORT2|$SSH_Port2|g" /etc/deekayvpn/service_checker.sh
 
@@ -977,6 +1468,13 @@ mkdir -p /var/run/sslh; touch /var/run/sslh/sslh.pid; chmod 777 /var/run/sslh/ss
 # Standard INPUT rule for Port 53
 iptables -C INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport 53 -j ACCEPT
 
+# Preserve Xray mKCP and Shadowsocks UDP before ZiVPN/Hysteria range DNAT.
+iptables -t nat -C PREROUTING -p udp --dport XRAYKCPPORT -j ACCEPT 2>/dev/null || iptables -t nat -I PREROUTING 1 -p udp --dport XRAYKCPPORT -j ACCEPT
+iptables -t nat -C PREROUTING -p udp --dport XRAYSSPORT -j ACCEPT 2>/dev/null || iptables -t nat -I PREROUTING 1 -p udp --dport XRAYSSPORT -j ACCEPT
+iptables -C INPUT -p udp --dport XRAYKCPPORT -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport XRAYKCPPORT -j ACCEPT
+iptables -C INPUT -p udp --dport XRAYSSPORT -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport XRAYSSPORT -j ACCEPT
+iptables -C INPUT -p tcp --dport XRAYSSPORT -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport XRAYSSPORT -j ACCEPT
+
 # 🚨 NEW FIX: VIP Pass for Port 53 (Prevents UDP Custom from swallowing SlowDNS traffic)
 iptables -t nat -C PREROUTING -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -t nat -I PREROUTING 1 -p udp --dport 53 -j ACCEPT
 
@@ -988,6 +1486,8 @@ deekayz
 sed -i "s|MyTimeZone|$MyVPS_Time|g" /etc/deekaystartup
 sed -i "s|DNS1|$Dns_1|g" /etc/deekaystartup
 sed -i "s|DNS2|$Dns_2|g" /etc/deekaystartup
+sed -i "s|XRAYKCPPORT|$XRAY_KCP_PORT|g" /etc/deekaystartup
+sed -i "s|XRAYSSPORT|$XRAY_SS_PORT|g" /etc/deekaystartup
 
 cat <<'deekayx' > /etc/systemd/system/deekaystartup.service
 [Unit]
@@ -1137,7 +1637,10 @@ HYST_CONFIG="/etc/hysteria/config.json"
 HYST_USER_DB="/etc/hysteria/users.txt"
 ZIVPN_CONFIG="/etc/zivpn/config.json"
 ZIVPN_USER_DB="/etc/zivpn/users.txt"
-touch "$HYST_USER_DB" "$ZIVPN_USER_DB" 2>/dev/null || true
+XRAY_CONFIG="/etc/xray/config.json"
+XRAY_SERVER_ENV="/etc/xray/server.env"
+[ -f "$XRAY_SERVER_ENV" ] && source "$XRAY_SERVER_ENV"
+touch "$HYST_USER_DB" "$ZIVPN_USER_DB" /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt 2>/dev/null || true
 
 # --- Utility Functions ---
 server_ip() { curl -4 -s --max-time 2 ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}'; }
@@ -1374,99 +1877,169 @@ speed_hysteria() {
 }
 
 # --- XRAY MANAGEMENT FUNCTIONS ---
+xray_commit_tmp() {
+  local tmp="$1"
+  if ! jq empty "$tmp" >/dev/null 2>&1; then
+    echo -e "${RED}Generated JSON is invalid.${NC}"
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! /usr/local/bin/xray run -test -config "$tmp" >/tmp/xray-menu-test.log 2>&1; then
+    echo -e "${RED}Xray rejected the generated configuration:${NC}"
+    cat /tmp/xray-menu-test.log
+    rm -f "$tmp"
+    return 1
+  fi
+  install -m 600 "$tmp" "$XRAY_CONFIG"
+  rm -f "$tmp"
+  systemctl restart xray
+}
+
+print_vless_links() {
+  local user="$1" uuid="$2"
+  [ -f "$XRAY_SERVER_ENV" ] && source "$XRAY_SERVER_ENV"
+  echo -e "\n${YELLOW}[ VLESS TLS / SHARED PORT 443 ]${NC}\n"
+  echo -e "RAW Legacy: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&sni=${DOMAIN}&allowInsecure=1#${user}-VLESS-RAW\n"
+  echo -e "TCP HTTP:  vless://${uuid}@${DOMAIN}:443?type=tcp&headerType=http&security=tls&encryption=none&host=${DOMAIN}&path=%2Fvless-tcp&sni=${DOMAIN}&allowInsecure=1#${user}-VLESS-TCP\n"
+  echo -e "WS:        vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-VLESS-WS\n"
+  echo -e "XHTTP:     vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-VLESS-XHTTP\n"
+  echo -e "HTTPUp:    vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-VLESS-HTTPUp\n"
+  echo -e "gRPC:      vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-VLESS-gRPC\n"
+
+  echo -e "${YELLOW}[ VLESS REALITY / SHARED PORT 443 ]${NC}\n"
+  echo -e "Reality TCP:   vless://${uuid}@${DOMAIN}:443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&sni=${REALITY_TCP_SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_TCP_SID}#${user}-REALITY-TCP\n"
+  echo -e "Reality gRPC:  vless://${uuid}@${DOMAIN}:443?type=grpc&security=reality&encryption=none&serviceName=reality-grpc&sni=${REALITY_GRPC_SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_GRPC_SID}#${user}-REALITY-gRPC\n"
+  echo -e "Reality XHTTP: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=reality&encryption=none&path=%2Freality-xhttp&mode=auto&sni=${REALITY_XHTTP_SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_XHTTP_SID}#${user}-REALITY-XHTTP\n"
+
+  echo -e "${YELLOW}[ VLESS mKCP UDP ]${NC}\n"
+  echo -e "mKCP: vless://${uuid}@${DOMAIN}:${XRAY_KCP_PORT}?type=kcp&security=none&encryption=none&headerType=none&seed=${XRAY_KCP_SEED}#${user}-VLESS-mKCP\n"
+
+  echo -e "${YELLOW}[ VLESS NTLS (80/8080/8880) ]${NC}\n"
+  echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none#${user}-VLESS-NTLS-TCP\n"
+  echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}-VLESS-NTLS-WS\n"
+  echo -e "HUP: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}#${user}-VLESS-NTLS-HTTPUp\n"
+}
+
+print_trojan_links() {
+  local user="$1" pass="$2"
+  echo -e "\n${YELLOW}[ TROJAN TLS / SHARED PORT 443 ]${NC}\n"
+  echo -e "TCP HTTP: trojan://${pass}@${DOMAIN}:443?type=tcp&headerType=http&security=tls&host=${DOMAIN}&path=%2Ftrojan-tcp&sni=${DOMAIN}&allowInsecure=1#${user}-TROJAN-TCP\n"
+  echo -e "WS:       trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-TROJAN-WS\n"
+  echo -e "XHTTP:    trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-TROJAN-XHTTP\n"
+  echo -e "HTTPUp:   trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-httpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-TROJAN-HTTPUp\n"
+  echo -e "gRPC:     trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-TROJAN-gRPC\n"
+}
+
+print_shadowsocks_link() {
+  local user="$1" user_key="$2" encoded
+  [ -f "$XRAY_SERVER_ENV" ] && source "$XRAY_SERVER_ENV"
+  encoded=$(printf '%s' "${XRAY_SS_METHOD}:${SS_MASTER_KEY}:${user_key}" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+  echo -e "\n${YELLOW}[ SHADOWSOCKS 2022 TCP+UDP ]${NC}\n"
+  echo -e "Method: ${XRAY_SS_METHOD}"
+  echo -e "Port:   ${XRAY_SS_PORT}"
+  echo -e "Password: ${SS_MASTER_KEY}:${user_key}\n"
+  echo -e "ss://${encoded}@${DOMAIN}:${XRAY_SS_PORT}#${user}-SS2022\n"
+}
+
 add_xray() {
   clear
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   echo -e "                   ${BOLD}CREATE XRAY ACCOUNT${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-  echo -e " [1] VLESS (All Transports: TCP, WS, xHTTP, HTTPUp, gRPC)"
-  echo -e " [2] TROJAN (WS Only)"
-  echo -e " [3] ALL-IN-ONE (VLESS + TROJAN)"
+  echo -e " [1] VLESS (TLS, REALITY, mKCP and NTLS transports)"
+  echo -e " [2] TROJAN (TCP, WS, XHTTP, HTTPUpgrade and gRPC)"
+  echo -e " [3] SHADOWSOCKS 2022 (TCP + UDP)"
+  echo -e " [4] ALL-IN-ONE (VLESS + TROJAN + SHADOWSOCKS)"
   read -rp " Select Protocol: " prot
+  [[ "$prot" =~ ^[1-4]$ ]] || { echo -e "${RED}Invalid option.${NC}"; pause_return; return; }
+
   read -rp " Username: " user
-  
-  if grep -qw "^$user" /etc/xray/vless.txt /etc/xray/trojan.txt 2>/dev/null; then
-    echo -e "${RED}Username already exists!${NC}"; pause_return; return
+  if ! [[ "$user" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo -e "${RED}Username may contain only letters, numbers, dot, underscore and hyphen.${NC}"; pause_return; return
+  fi
+  if awk -v u="$user" '$1==u {found=1} END {exit !found}' /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt 2>/dev/null; then
+    echo -e "${RED}Username already exists.${NC}"; pause_return; return
   fi
 
   read -rp " Validity (Days): " masa
+  [[ "$masa" =~ ^[0-9]+$ ]] && [ "$masa" -gt 0 ] || { echo -e "${RED}Invalid validity.${NC}"; pause_return; return; }
   exp=$(date -d "+${masa} days" +"%Y-%m-%d")
 
-  read -rp " Do you want to use a custom UUID? (y/N): " custom_uuid_prompt
-  if [[ "$custom_uuid_prompt" =~ ^[Yy]$ ]]; then
-    read -rp " Enter custom UUID: " uuid
-  else
-    uuid=$(cat /proc/sys/kernel/random/uuid)
+  uuid=$(cat /proc/sys/kernel/random/uuid)
+  if [ "$prot" = "1" ] || [ "$prot" = "4" ]; then
+    read -rp " Use a custom UUID? (y/N): " custom_uuid_prompt
+    if [[ "$custom_uuid_prompt" =~ ^[Yy]$ ]]; then
+      read -rp " Enter custom UUID: " uuid
+      [[ "$uuid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || { echo -e "${RED}Invalid UUID.${NC}"; pause_return; return; }
+    fi
   fi
 
-  pass="Guruz${uuid:0:6}"
-  
-  if [ "$prot" == "1" ]; then
-    jq ".inbounds[0].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[2].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[3].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[4].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[5].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[6].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
+  pass="Guruz${uuid:0:8}"
+  ss_user_key=$(openssl rand -base64 32 | tr -d '\n')
+  tmp=$(mktemp /tmp/xray-menu.XXXXXX.json)
+
+  case "$prot" in
+    1)
+      jq --arg uuid "$uuid" --arg user "$user" '
+        .inbounds |= map(
+          if .protocol == "vless" and (((.settings.clients? // null) | type) == "array") then
+            .settings.clients += [if .tag == "vless-reality-tcp" then {"id":$uuid,"email":$user,"flow":"xtls-rprx-vision"} else {"id":$uuid,"email":$user} end]
+          else . end
+        )
+      ' "$XRAY_CONFIG" > "$tmp" || { rm -f "$tmp"; pause_return; return; }
+      ;;
+    2)
+      jq --arg pass "$pass" --arg user "$user" '
+        .inbounds |= map(if .protocol == "trojan" and (((.settings.clients? // null) | type) == "array") then .settings.clients += [{"password":$pass,"email":$user}] else . end)
+      ' "$XRAY_CONFIG" > "$tmp" || { rm -f "$tmp"; pause_return; return; }
+      ;;
+    3)
+      jq --arg key "$ss_user_key" --arg user "$user" '
+        (.inbounds[] | select(.tag == "shadowsocks-2022") | .settings.users) += [{"password":$key,"email":$user}]
+      ' "$XRAY_CONFIG" > "$tmp" || { rm -f "$tmp"; pause_return; return; }
+      ;;
+    4)
+      jq --arg uuid "$uuid" --arg pass "$pass" --arg key "$ss_user_key" --arg user "$user" '
+        .inbounds |= map(
+          if .protocol == "vless" and (((.settings.clients? // null) | type) == "array") then
+            .settings.clients += [if .tag == "vless-reality-tcp" then {"id":$uuid,"email":$user,"flow":"xtls-rprx-vision"} else {"id":$uuid,"email":$user} end]
+          elif .protocol == "trojan" and (((.settings.clients? // null) | type) == "array") then
+            .settings.clients += [{"password":$pass,"email":$user}]
+          elif .tag == "shadowsocks-2022" then
+            .settings.users += [{"password":$key,"email":$user}]
+          else . end
+        )
+      ' "$XRAY_CONFIG" > "$tmp" || { rm -f "$tmp"; pause_return; return; }
+      ;;
+  esac
+
+  if ! xray_commit_tmp "$tmp"; then pause_return; return; fi
+
+  if [ "$prot" = "1" ] || [ "$prot" = "4" ]; then
     echo "$user $uuid $exp" >> /etc/xray/vless.txt
-    
-    clear
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "                   ${BOLD}VLESS ACCOUNT CREATED${NC}"
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "Username : $user\nExpiry   : $exp\n"
-    
-    echo -e "${YELLOW}[ VLESS TLS (443) ]${NC}\n"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&host=${DOMAIN}&path=%2Fvless&allowInsecure=1#${user}-TCP\n"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS\n"
-    echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-xHTTP\n"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HTTPUp\n"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
-
-    echo -e "${YELLOW}[ VLESS NTLS (80/8080/8880) ]${NC}\n"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&host=${DOMAIN}&path=%2Fvless#${user}-TCP\n"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}-WS\n"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}#${user}-HTTPUp\n"
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-  
-  elif [ "$prot" == "2" ]; then
-    jq ".inbounds[1].settings.clients += [{\"password\": \"$pass\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
-    echo "$user $pass $exp" >> /etc/xray/trojan.txt
-    
-    clear
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "                   ${BOLD}TROJAN ACCOUNT CREATED${NC}"
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "Username: $user\nPassword: $pass\nExpiry: $exp\n"
-    echo -e "${YELLOW}[ TROJAN TLS (443) ]${NC}\n"
-    echo -e "trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-
-  elif [ "$prot" == "3" ]; then
-    jq ".inbounds[0].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[2].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[3].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[4].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[5].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[6].settings.clients += [{\"id\": \"$uuid\", \"email\": \"$user\"}] | .inbounds[1].settings.clients += [{\"password\": \"$pass\", \"email\": \"$user\"}]" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
-    
-    echo "$user $uuid $exp" >> /etc/xray/vless.txt
-    echo "$user $pass $exp" >> /etc/xray/trojan.txt
-
-    clear
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "               ${BOLD}ALL-IN-ONE ACCOUNT CREATED${NC}"
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "Username: $user\nExpiry:   $exp\n"
-    echo -e "${CYAN}--------------------------------------------------------------${NC}\n"
-    
-    echo -e "${YELLOW}[ VLESS TLS (443) ]${NC}\n"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&host=${DOMAIN}&path=%2Fvless&allowInsecure=1#${user}-TCP\n"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS\n"
-    echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-xHTTP\n"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HTTPUp\n"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
-
-    echo -e "${YELLOW}[ VLESS NTLS (80/8080/8880) ]${NC}\n"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&host=${DOMAIN}&path=%2Fvless#${user}-TCP\n"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}-WS\n"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}#${user}-HTTPUp\n"
-
-    echo -e "${YELLOW}[ TROJAN TLS (443) ]${NC}\n"
-    echo -e "trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
-    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   fi
-  systemctl restart xray
+  if [ "$prot" = "2" ] || [ "$prot" = "4" ]; then
+    echo "$user $pass $exp" >> /etc/xray/trojan.txt
+  fi
+  if [ "$prot" = "3" ] || [ "$prot" = "4" ]; then
+    echo "$user $ss_user_key $exp" >> /etc/xray/shadowsocks.txt
+  fi
+
+  clear
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "                 ${BOLD}XRAY ACCOUNT CREATED${NC}"
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+  echo -e "Username: $user\nExpiry:   $exp"
+  if [ "$prot" = "1" ] || [ "$prot" = "4" ]; then
+    print_vless_links "$user" "$uuid"
+  fi
+  if [ "$prot" = "2" ] || [ "$prot" = "4" ]; then
+    print_trojan_links "$user" "$pass"
+  fi
+  if [ "$prot" = "3" ] || [ "$prot" = "4" ]; then
+    print_shadowsocks_link "$user" "$ss_user_key"
+  fi
+  echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
   pause_return
 }
 
@@ -1475,25 +2048,21 @@ del_xray() {
   echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
   echo -e "                   ${BOLD}DELETE XRAY ACCOUNT${NC}"
   echo -e "${RED}══════════════════════════════════════════════════════════════${NC}"
-  
-  mapfile -t users < <(cat /etc/xray/*.txt 2>/dev/null | awk '{print $1}' | sort -u)
-  
-  if [ ${#users[@]} -eq 0 ]; then 
-      echo -e "${YELLOW}No Xray users found.${NC}"; pause_return; return
-  fi
+  mapfile -t users < <(cat /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt 2>/dev/null | awk '{print $1}' | sort -u)
+  if [ ${#users[@]} -eq 0 ]; then echo -e "${YELLOW}No Xray users found.${NC}"; pause_return; return; fi
   for i in "${!users[@]}"; do printf "  [${YELLOW}%02d${NC}] %s\n" $((i+1)) "${users[$i]}"; done
   echo -e "\n  [${YELLOW}00${NC}] Cancel\n"
-
-  read -rp "  Select user to delete: " idx
-  if [[ "$idx" == "00" || "$idx" == "0" ]]; then return; fi
-  if ! [[ "$idx" =~ ^[0-9]+$ ]] || [ "$idx" -le 0 ] || [ "$idx" -gt "${#users[@]}" ]; then 
-      echo -e "${RED}Invalid selection.${NC}"; pause_return; return 
-  fi
-
+  read -rp " Select user to delete: " idx
+  [[ "$idx" == "00" || "$idx" == "0" ]] && return
+  [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -gt 0 ] && [ "$idx" -le "${#users[@]}" ] || { echo -e "${RED}Invalid selection.${NC}"; pause_return; return; }
   user="${users[$((idx-1))]}"
-  jq "(.inbounds[].settings.clients) |= map(select(.email != \"$user\"))" /etc/xray/config.json > /tmp/x.json && mv /tmp/x.json /etc/xray/config.json
-  sed -i "/^$user /d" /etc/xray/vless.txt /etc/xray/trojan.txt 2>/dev/null
-  systemctl restart xray
+  tmp=$(mktemp /tmp/xray-menu.XXXXXX.json)
+  jq --arg user "$user" '
+    (.inbounds[] | select(((.settings.clients? // null) | type) == "array") | .settings.clients) |= map(select(.email != $user)) |
+    (.inbounds[] | select(((.settings.users? // null) | type) == "array") | .settings.users) |= map(select(.email != $user))
+  ' "$XRAY_CONFIG" > "$tmp" || { rm -f "$tmp"; pause_return; return; }
+  xray_commit_tmp "$tmp" || { pause_return; return; }
+  sed -i "/^${user} /d" /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt 2>/dev/null
   echo -e "\n${GREEN}✔ User $user deleted successfully.${NC}"
   pause_return
 }
@@ -1504,16 +2073,19 @@ renew_xray() {
   echo -e "                   ${BOLD}RENEW XRAY ACCOUNT${NC}"
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to renew: " user
-  
-  if ! grep -qw "^$user" /etc/xray/vless.txt /etc/xray/trojan.txt 2>/dev/null; then 
+  if ! awk -v u="$user" '$1==u {found=1} END {exit !found}' /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt 2>/dev/null; then
     echo -e "${RED}User not found.${NC}"; pause_return; return
   fi
   read -rp " Add Validity (Days): " days
-  for proto in vless trojan; do 
-    if grep -qw "^$user" "/etc/xray/${proto}.txt"; then
-      current_exp=$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $3}')
+  [[ "$days" =~ ^[0-9]+$ ]] && [ "$days" -gt 0 ] || { echo -e "${RED}Invalid validity.${NC}"; pause_return; return; }
+  new_exp=""
+  for proto in vless trojan shadowsocks; do
+    db="/etc/xray/${proto}.txt"
+    if awk -v u="$user" '$1==u {found=1} END {exit !found}' "$db" 2>/dev/null; then
+      current_exp=$(awk -v u="$user" '$1==u {print $3; exit}' "$db")
+      credential=$(awk -v u="$user" '$1==u {print $2; exit}' "$db")
       new_exp=$(date -d "$current_exp + $days days" +"%Y-%m-%d")
-      sed -i "s/^$user .* $current_exp/$(grep -w "^$user" "/etc/xray/${proto}.txt" | awk '{print $1 " " $2}') $new_exp/" "/etc/xray/${proto}.txt"
+      awk -v u="$user" -v c="$credential" -v e="$new_exp" '$1==u {$0=u" "c" "e} {print}' "$db" > "${db}.tmp" && mv "${db}.tmp" "$db"
     fi
   done
   echo -e "\n${GREEN}✔ User '$user' renewed successfully.${NC}\nNew Expiry: $new_exp"
@@ -1527,28 +2099,22 @@ show_xray() {
   echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
   read -rp " Username to view: " user
   local found=0
-  if grep -qw "^$user" /etc/xray/vless.txt; then
-    uuid=$(grep -w "^$user" /etc/xray/vless.txt | awk '{print $2}')
-    echo -e "\n${YELLOW}[ VLESS TLS (443) ]${NC}\n"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&host=${DOMAIN}&path=%2Fvless&allowInsecure=1#${user}-TCP\n"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-WS\n"
-    echo -e "XHT: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-xHTTP\n"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-HTTPUp\n"
-    echo -e "GRPC: vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-gRPC\n"
-
-    echo -e "${YELLOW}[ VLESS NTLS (80) ]${NC}\n"
-    echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none&host=${DOMAIN}&path=%2Fvless#${user}-TCP\n"
-    echo -e "WS:  vless://${uuid}@${DOMAIN}:80?type=ws&security=none&encryption=none&path=%2Fvless&host=${DOMAIN}#${user}-WS\n"
-    echo -e "HUP: vless://${uuid}@${DOMAIN}:80?type=httpupgrade&security=none&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}#${user}-HTTPUp\n"
+  if awk -v u="$user" '$1==u {found=1} END {exit !found}' /etc/xray/vless.txt 2>/dev/null; then
+    uuid=$(awk -v u="$user" '$1==u {print $2; exit}' /etc/xray/vless.txt)
+    print_vless_links "$user" "$uuid"
     found=1
   fi
-  if grep -qw "^$user" /etc/xray/trojan.txt; then
-    pass=$(grep -w "^$user" /etc/xray/trojan.txt | awk '{print $2}')
-    echo -e "${YELLOW}[ TROJAN TLS (443) ]${NC}\n"
-    echo -e "trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}\n"
+  if awk -v u="$user" '$1==u {found=1} END {exit !found}' /etc/xray/trojan.txt 2>/dev/null; then
+    pass=$(awk -v u="$user" '$1==u {print $2; exit}' /etc/xray/trojan.txt)
+    print_trojan_links "$user" "$pass"
     found=1
   fi
-  if [ "$found" -eq 0 ]; then echo -e "${RED}User not found in any protocol.${NC}"; fi
+  if awk -v u="$user" '$1==u {found=1} END {exit !found}' /etc/xray/shadowsocks.txt 2>/dev/null; then
+    ss_user_key=$(awk -v u="$user" '$1==u {print $2; exit}' /etc/xray/shadowsocks.txt)
+    print_shadowsocks_link "$user" "$ss_user_key"
+    found=1
+  fi
+  [ "$found" -eq 1 ] || echo -e "${RED}User not found in any protocol.${NC}"
   pause_return
 }
 
@@ -1749,7 +2315,7 @@ service_control_menu() {
 backup_snapshot() {
   clear; local out="/root/guruzgh_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
   echo -e "Packaging server configurations..."
-  tar -czf "$out" /etc/ssh /etc/default/dropbear /etc/stunnel /etc/squid /etc/hysteria /etc/zivpn /root/udp /etc/deekayvpn /etc/systemd/system/ws-proxy@.service /etc/xray 2>/dev/null
+  tar -czf "$out" /etc/ssh /etc/default/dropbear /etc/stunnel /etc/squid /etc/hysteria /etc/zivpn /root/udp /etc/deekayvpn /etc/systemd/system/ws-proxy@.service /etc/xray /etc/haproxy/haproxy.cfg /etc/haproxy/certs 2>/dev/null
   echo -e "\n${GREEN}✔ Backup successfully created!${NC}\nLocation: ${YELLOW}$out${NC}"
   pause_return
 }
@@ -1771,7 +2337,7 @@ restore_snapshot() {
   if [ -n "${backups[$idx]}" ]; then
     echo -e "\nRestoring ${YELLOW}$(basename "${backups[$idx]}")${NC}..."
     tar -xzf "${backups[$idx]}" -C /
-    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn ws-proxy@10080 ws-proxy@2082 ws-proxy@2086 xray 2>/dev/null || true
+    systemctl daemon-reload; systemctl restart ssh dropbear stunnel4 sslh squid nginx server-sldns hysteria-server badvpn udp-custom zivpn ws-proxy@10080 ws-proxy@2082 ws-proxy@2086 xray haproxy 2>/dev/null || true
     echo -e "${GREEN}✔ Restore complete!${NC}"
   else echo -e "${RED}Invalid selection.${NC}"; fi
   pause_return
@@ -1864,7 +2430,7 @@ advanced_menu() {
     case "$opt" in
       1|01) clear; cat /etc/hysteria/config.json 2>/dev/null || echo "Not found."; pause_return ;;
     2|02) 
-        clear; echo -e "[1] SSH  [2] WS-Proxies  [3] Hysteria  [4] Stunnel  [5] SlowDNS  [6] Xray  [7] UDP Custom  [8] ZiVPN\n"
+        clear; echo -e "[1] SSH  [2] WS-Proxies  [3] Hysteria  [4] Stunnel  [5] SlowDNS  [6] Xray  [7] UDP Custom  [8] ZiVPN  [9] HAProxy\n"
         read -rp "Select log: " lopt
         case "$lopt" in
           1) journalctl -u ssh -n 50 --no-pager ;;
@@ -1875,6 +2441,7 @@ advanced_menu() {
           6) journalctl -u xray -n 50 --no-pager ;;
           7) journalctl -u udp-custom -n 50 --no-pager ;;
           8) journalctl -u zivpn -n 50 --no-pager ;;
+          9) journalctl -u haproxy -n 50 --no-pager ;;
         esac; pause_return ;;
       3|03) change_domain ;;
       4|04) change_slowdns ;;
@@ -1892,13 +2459,13 @@ remove_script() {
   read -rp "  Are you absolutely sure? [y/N]: " ans
   if [[ "$ans" =~ ^[Yy]$ ]]; then
       echo -e "\nStopping services..."
-      systemctl stop ws-proxy@* server-sldns badvpn hysteria-server udp-custom zivpn sslh stunnel4 squid dropbear nginx xray 2>/dev/null || true
-      systemctl disable ws-proxy@* server-sldns badvpn hysteria-server udp-custom zivpn xray 2>/dev/null || true
+      systemctl stop ws-proxy@* server-sldns badvpn hysteria-server udp-custom zivpn sslh stunnel4 squid dropbear nginx haproxy xray 2>/dev/null || true
+      systemctl disable ws-proxy@* server-sldns badvpn hysteria-server udp-custom zivpn haproxy xray 2>/dev/null || true
       echo "Deleting files..."
       rm -f /etc/systemd/system/ws-proxy@.service /etc/systemd/system/server-sldns.service /etc/systemd/system/badvpn.service /etc/systemd/system/xray.service
       rm -f /etc/systemd/system/udp-custom.service /etc/systemd/system/zivpn.service /etc/systemd/system/zivpn-nat.service
       rm -f /etc/cron.d/service-checker /etc/cron.d/logrotate /etc/cron.d/xray-expiry /etc/cron.d/hysteria-expiry /etc/cron.d/zivpn-expiry /etc/sysctl.d/99-freenet-tuning.conf /etc/security/limits.d/99-freenet.conf
-      rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /etc/hysteria /etc/zivpn /root/udp /usr/local/bin/menu /usr/bin/menu /usr/bin/Menu
+      rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /etc/hysteria /etc/zivpn /etc/haproxy/haproxy.cfg /etc/haproxy/certs /etc/systemd/system/haproxy.service.d /root/udp /usr/local/bin/menu /usr/bin/menu /usr/bin/Menu
       systemctl daemon-reload; sysctl --system >/dev/null 2>&1 || true
       echo -e "${GREEN}✔ Removal complete.${NC}"
   else echo "Cancelled."; fi
@@ -1931,6 +2498,7 @@ draw_header() {
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "80, 8080, 8880" "Squid:" "3128, 8000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "WS/PYTHON:" "2082, 2086" "BadVPN:" "7300"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY TLS:" "443" "XRAY NTLS:" "80, 8080, 8880"
+  printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "XRAY mKCP:" "16888/udp" "SS 2022:" "8388/tcp+udp"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "SlowDNS:" "53" "HysteriaUDP:" "20000-50000"
   printf "  ${WHITE}• %-12s${NC} ${GREEN}%-22s${NC} ${WHITE}• %-13s${NC} ${GREEN}%s${NC}\n" "UDPCustom:" "1-65535" "ZiVPN:" "6000-19999"
   echo -e "${CYAN}----------------------- ${BOLD}SYSTEM RESOURCES${NC} ${CYAN}-----------------------${NC}"
@@ -1941,7 +2509,7 @@ draw_header() {
 while true; do
   clear; draw_header; echo
   echo -e "  [${YELLOW}01${NC}] SSH Account Management (Legacy & UDP Custom)"
-  echo -e "  [${YELLOW}02${NC}] Xray Account Management (V2ray)"
+  echo -e "  [${YELLOW}02${NC}] Xray Account Management (VLESS/Trojan/SS)"
   echo -e "  [${YELLOW}03${NC}] Hysteria Account Management (UDP)"
   echo -e "  [${YELLOW}04${NC}] ZiVPN Account Management (UDP)"
   echo -e "  [${YELLOW}05${NC}] Monitor Active Connections"
@@ -1963,7 +2531,7 @@ while true; do
       while true; do
         clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}XRAY ACCOUNT MANAGEMENT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
         echo -e "  [${YELLOW}1${NC}] Add Xray Account\n  [${YELLOW}2${NC}] Renew Xray Account\n  [${YELLOW}3${NC}] Delete Xray Account\n  [${YELLOW}4${NC}] Show Config Links\n  [${YELLOW}5${NC}] Force Delete Expired Xray Users Now\n  [${YELLOW}6${NC}] Update Xray Core Version\n  [${YELLOW}0${NC}] Back\n"
-        read -rp "  ► Option: " sub; case "$sub" in 1) add_xray;; 2) renew_xray;; 3) del_xray;; 4) show_xray;; 5) /usr/local/bin/exp-check; echo "Expired Xray users wiped."; pause_return;; 6) systemctl stop xray; XRAY_VER="v26.5.9"; echo "Reinstalling Xray Core ${XRAY_VER}..."; wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip"; unzip -q -o /tmp/xray.zip -d /tmp/xray/ && mv -f /tmp/xray/xray /usr/local/bin/xray; systemctl start xray; echo -e "${GREEN}✔ Xray Restored to ${XRAY_VER}!${NC}"; pause_return;; 0) break;; esac
+        read -rp "  ► Option: " sub; case "$sub" in 1) add_xray;; 2) renew_xray;; 3) del_xray;; 4) show_xray;; 5) /usr/local/bin/exp-check; echo "Expired Xray users wiped."; pause_return;; 6) systemctl stop xray; XRAY_VER="v26.3.27"; echo "Reinstalling Xray Core ${XRAY_VER}..."; wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip"; unzip -q -o /tmp/xray.zip -d /tmp/xray/ && mv -f /tmp/xray/xray /usr/local/bin/xray; systemctl start xray; echo -e "${GREEN}✔ Xray Restored to ${XRAY_VER}!${NC}"; pause_return;; 0) break;; esac
       done ;;
     3|03)
       while true; do
