@@ -459,7 +459,7 @@ chmod +x /usr/local/bin/xray
 touch /etc/xray/vless.txt /etc/xray/trojan.txt
 rm -rf /tmp/xray*
 
-# FIXED XRAY CONFIGURATION (NO VMESS, ALPN FIXED, FALLBACKS CLEANED)
+# XRAY CONFIGURATION
 cat <<EOF > /etc/xray/config.json
 {
   "log": { "access": "none", "error": "/var/log/xray/error.log", "loglevel": "error" },
@@ -513,7 +513,7 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload; systemctl enable xray; systemctl restart xray
 
-# USER EXPIRY CRONJOB FOR XRAY (VMESS REMOVED)
+# USER EXPIRY CRONJOB FOR XRAY
 cat <<'EOF_EXP' > /usr/local/bin/exp-check
 #!/bin/bash
 now=$(date +%Y-%m-%d)
@@ -892,12 +892,35 @@ cat > /etc/hysteria/config.json <<EOF
       {
         "inbound": "hy1-inbound",
         "network": "udp",
-        "domain_suffix": [ "youtube.com", "ytimg.com", "googlevideo.com","doubleclick.net", "googlesyndication.com", "googleadservices.com", "admob.com","googleapis.com","google-analytics.com", "app-measurement.com", "adservice.google.com", "g.doubleclick.net", "google.com", "pagead2.googlesyndication.com", "tpc.googlesyndication.com", "googlevideo.com", "gvt1.com", "gvt2.com", "gvt3.com", "gstatic.com", "googleusercontent.com", "ggpht.com", "play.google.com", "firebaseio.com", "firebase.googleapis.com", "crashlytics.com", "fundingchoicesmessages.google.com", "imasdk.googleapis.com", "googleanalytics.com", "analytics.google.com", "fcm.googleapis.com", "mtalk.google.com", "firebaseinstallations.googleapis.com", "firebaselogging.googleapis.com", "firebaselogging-pa.googleapis.com", "firebaseremoteconfig.googleapis.com", "googleadapis.com","app-measurement.com", "accounts.google.com", "play.googleapis.com", "android.apis.google.com", "adsense.com", "1e100.net" ],
+       "domain_suffix": [ 
+          "doubleclick.net", 
+          "googlesyndication.com", "googleadservices.com", "admob.com", 
+          "google-analytics.com", "app-measurement.com", "adservice.google.com", 
+          "g.doubleclick.net", "pagead2.googlesyndication.com", "tpc.googlesyndication.com", 
+          "gvt1.com", "gvt2.com", "gvt3.com", "googleanalytics.com", 
+          "analytics.google.com", "googleadapis.com", "adsense.com" 
+        ],
         "outbound": "block"
       },
       {
-        "inbound": "hy1-inbound",
-        "domain_suffix": [ "youtube.com", "ytimg.com", "googlevideo.com","doubleclick.net", "googlesyndication.com", "googleadservices.com", "admob.com","googleapis.com","google-analytics.com", "app-measurement.com", "adservice.google.com", "g.doubleclick.net", "google.com", "pagead2.googlesyndication.com", "tpc.googlesyndication.com", "googlevideo.com", "gvt1.com", "gvt2.com", "gvt3.com", "gstatic.com", "googleusercontent.com", "ggpht.com", "play.google.com", "firebaseio.com", "firebase.googleapis.com", "crashlytics.com", "fundingchoicesmessages.google.com", "imasdk.googleapis.com", "googleanalytics.com", "analytics.google.com", "fcm.googleapis.com", "mtalk.google.com", "firebaseinstallations.googleapis.com", "firebaselogging.googleapis.com", "firebaselogging-pa.googleapis.com", "firebaseremoteconfig.googleapis.com", "googleadapis.com","app-measurement.com", "accounts.google.com", "play.googleapis.com", "android.apis.google.com", "adsense.com", "1e100.net" ],
+       "inbound": "hy1-inbound",
+        "domain_suffix": [ 
+          "doubleclick.net", 
+          "googlesyndication.com", "googleadservices.com", "admob.com", 
+          "googleapis.com", "google-analytics.com", "app-measurement.com", 
+          "adservice.google.com", "g.doubleclick.net", "google.com", 
+          "pagead2.googlesyndication.com", "tpc.googlesyndication.com", 
+          "gvt1.com", "gvt2.com", "gvt3.com", "gstatic.com", 
+          "googleusercontent.com", "ggpht.com", "play.google.com", 
+          "firebaseio.com", "firebase.googleapis.com", "crashlytics.com", 
+          "fundingchoicesmessages.google.com", "imasdk.googleapis.com", 
+          "googleanalytics.com", "analytics.google.com", "fcm.googleapis.com", 
+          "mtalk.google.com", "firebaseinstallations.googleapis.com", 
+          "firebaselogging.googleapis.com", "firebaselogging-pa.googleapis.com", 
+          "firebaseremoteconfig.googleapis.com", "googleadapis.com", 
+          "accounts.google.com", "play.googleapis.com", "android.apis.google.com", 
+          "adsense.com", "1e100.net" 
+        ],
         "outbound": "warp-proxy"
       },
       { "inbound": "hy1-inbound", "outbound": "direct" }
