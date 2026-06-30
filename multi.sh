@@ -42,6 +42,30 @@ fi
 
 #Script Variables
 read -p "Enter your Domain/Subdomain for Xray (or press enter for IP): " -e -i "$(curl -4 -s --max-time 2 ipv4.icanhazip.com || hostname -I | awk '{print $1}')" DOMAIN
+
+is_ipv4_literal() {
+  local IFS=. octet
+  local -a parts
+  read -r -a parts <<< "$1"
+  [ "${#parts[@]}" -eq 4 ] || return 1
+  for octet in "${parts[@]}"; do
+    [[ "$octet" =~ ^[0-9]{1,3}$ ]] || return 1
+    (( 10#$octet <= 255 )) || return 1
+  done
+}
+
+is_dns_name() {
+  [ "${#1}" -le 253 ] &&
+    [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]
+}
+
+DOMAIN_IS_IPV4=0
+if is_ipv4_literal "$DOMAIN"; then
+  DOMAIN_IS_IPV4=1
+elif ! is_dns_name "$DOMAIN"; then
+  echo "Invalid Xray domain/IP. Enter a DNS hostname or IPv4 address only."
+  exit 1
+fi
 export DOMAIN
 
 # OpenSSH Ports
@@ -93,12 +117,13 @@ export OBFS PASSWORD
 
 # Xray extended protocols (Hiddify-style, no VMess)
 XRAY_KCP_PORT="16888"
-XRAY_KCP_SEED="GuruzKCP"
+# Generated after OpenSSL is installed. An environment override remains possible.
+XRAY_KCP_SEED="${XRAY_KCP_SEED:-}"
 XRAY_SS_PORT="8388"
 XRAY_SS_METHOD="2022-blake3-aes-256-gcm"
 
 _default_reality_tcp_sni="www.microsoft.com"
-_default_reality_grpc_sni="www.apple.com"
+_default_reality_grpc_sni="www.amazon.com"
 _default_reality_xhttp_sni="www.samsung.com"
 
 if [ -t 0 ]; then
@@ -134,8 +159,15 @@ Dns_2='1.0.0.1'
 MyVPS_Time='Africa/Accra'
 
 # Telegram IDs
-My_Chat_ID='344472672'
-My_Bot_Key='8715170470:AAE8urT5fSWdZ_xgkwwZivN4kgHW9nBVxgY'
+# Optional Telegram health notifications. Never embed reusable bot credentials.
+My_Chat_ID="${TELEGRAM_CHAT_ID:-}"
+My_Bot_Key="${TELEGRAM_BOT_TOKEN:-}"
+if [ -t 0 ] && [ -z "$My_Bot_Key" ]; then
+  read -r -p "Telegram bot token for health alerts (optional; press enter to disable): " My_Bot_Key
+  if [ -n "$My_Bot_Key" ]; then
+    read -r -p "Telegram chat ID: " My_Chat_ID
+  fi
+fi
 
 function ip_address(){
   local IP="$( ip addr | egrep -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | egrep -v "^192\.168|^172\.1[6-9]\.|^172\.2[0-9]\.|^172\.3[0-2]\.|^10\.|^127\.|^255\.|^0\." | head -n 1 )"
@@ -216,68 +248,76 @@ rm -rf webmin_2.111_all.deb
 sed -i 's|ssl=1|ssl=0|g' /etc/webmin/miniserv.conf
 systemctl restart webmin || true
 
-# === HARDCODED CERTIFICATE FOR XRAY & STUNNEL ===
-echo "Applying default hardcoded SSL Certificate for Xray & Stunnel..."
+# === UNIQUE TLS CERTIFICATE FOR XRAY, HAPROXY & STUNNEL ===
+# Prefer a trusted ACME certificate when the hostname already points here.
+# IP installs and failed ACME attempts receive a unique per-install certificate.
+echo "Provisioning a unique SSL certificate for Xray & Stunnel..."
+XRAY_TLS_ALLOW_INSECURE="1"
+XRAY_CERT_SOURCE="self-signed"
+rm -f /etc/xray/xray.key /etc/xray/xray.crt
 
-cat <<'EOF_KEY' > /etc/xray/xray.key
------BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQClmgCdm7RB2VWK
-wfH8HO/T9bxEddWDsB3fJKpM/tiVMt4s/WMdGJtFdRlxzUb03u+HT6t00sLlZ78g
-ngjxLpJGFpHAGdVf9vACBtrxv5qcrG5gd8k7MJ+FtMTcjeQm8kVRyIW7cOWxlpGY
-6jringYZ6NcRTrh/OlxIHKdsLI9ddcekbYGyZVTm1wd22HVG+07PH/AeyY78O2+Z
-tbjxGTFRSYt3jUaFeUmWNtxqWnR4MPmC+6iKvUKisV27P89g8v8CiZynAAWRJ0+A
-qp+PWxwHi/iJ501WdLspeo8VkXIb3PivyIKC356m+yuuibD2uqwLZ2//afup84Qu
-pRtgW/PbAgMBAAECggEAVo/efIQUQEtrlIF2jRNPJZuQ0rRJbHGV27tdrauU6MBT
-NG8q7N2c5DymlT75NSyHRlKVzBYTPDjzxgf1oqR2X16Sxzh5uZTpthWBQtal6fmU
-JKbYsDDlYc2xDZy5wsXnCC3qAaWs2xxadPUS3Lw/cjGsoeZlOFP4QtV/imLseaws
-7r4KZE7SVO8dF8Xtcy304Bd7UsKClnbCrGsABUF/rqA8g34o7yrpo9XqcwbF5ihQ
-TbnB0Ns8Bz30pjgGjJZTdTL3eskP9qMJWo/JM76kSaJWReoXTws4DlQHxO29z3eK
-zKdxieXaBGMwFnv23JvXKJ5eAnxzqsL6a+SuNPPN4QKBgQDQhisSDdjUJWy0DLnJ
-/HjtsnQyfl0efOqAlUEir8r5IdzDTtAEcW6GwPj1rIOm79ZeyysT1pGN6eulzS1i
-6lz6/c5uHA9Z+7LT48ZaQjmKF06ItdfHI9ytoXaaQPMqW7NnyOFxCcTHBabmwQ+E
-QZDFkM6vVXL37Sz4JyxuIwCNMQKBgQDLThgKi+L3ps7y1dWayj+Z0tutK2JGDww7
-6Ze6lD5gmRAURd0crIF8IEQMpvKlxQwkhqR4vEsdkiFFJQAaD+qZ9XQOkWSGXvKP
-A/yzk0Xu3qL29ZqX+3CYVjkDbtVOLQC9TBG60IFZW79K/Zp6PhHkO8w6l+CBR+yR
-X4+8x1ReywKBgQCfSg52wSski94pABugh4OdGBgZRlw94PCF/v390En92/c3Hupa
-qofi2mCT0w/Sox2f1hV3Fw6jWNDRHBYSnLMgbGeXx0mW1GX75OBtrG8l5L3yQu6t
-SeDWpiPim8DlV52Jp3NHlU3DNrcTSOFgh3Fe6kpot56Wc5BJlCsliwlt0QKBgEol
-u0LtbePgpI2QS41ewf96FcB8mCTxDAc11K6prm5QpLqgGFqC197LbcYnhUvMJ/eS
-W53lHog0aYnsSrM2pttr194QTNds/Y4HaDyeM91AubLUNIPFonUMzVJhM86FP0XK
-3pSBwwsyGPxirdpzlNbmsD+WcLz13GPQtH2nPTAtAoGAVloDEEjfj5gnZzEWTK5k
-4oYWGlwySfcfbt8EnkY+B77UVeZxWnxpVC9PhsPNI1MTNET+CRqxNZzxWo3jVuz1
-HtKSizJpaYQ6iarP4EvUdFxHBzjHX6WLahTgUq90YNaxQbXz51ARpid8sFbz1f37
-jgjgxgxbitApzno0E2Pq/Kg=
------END PRIVATE KEY-----
-EOF_KEY
+if [ "$DOMAIN_IS_IPV4" -eq 0 ] && [ -n "$IPADDR" ] && \
+   getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | grep -Fxq "$IPADDR"; then
+  systemctl stop xray 2>/dev/null || true
+  if certbot certonly --standalone --non-interactive --agree-tos \
+      --register-unsafely-without-email --preferred-challenges http \
+      --keep-until-expiring -d "$DOMAIN"; then
+    install -m 600 "/etc/letsencrypt/live/$DOMAIN/privkey.pem" /etc/xray/xray.key
+    install -m 644 "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" /etc/xray/xray.crt
+    XRAY_TLS_ALLOW_INSECURE="0"
+    XRAY_CERT_SOURCE="letsencrypt"
+  fi
+fi
 
-cat <<'EOF_CRT' > /etc/xray/xray.crt
------BEGIN CERTIFICATE-----
-MIIDRTCCAi2gAwIBAgIUOvs3vdjcBtCLww52CggSlAKafDkwDQYJKoZIhvcNAQEL
-BQAwMjEQMA4GA1UEAwwHS29ielZQTjERMA8GA1UECgwIS29iZUtvYnoxCzAJBgNV
-BAYTAlBIMB4XDTIxMDcwNzA1MzQwN1oXDTMxMDcwNTA1MzQwN1owMjEQMA4GA1UE
-AwwHS29ielZQTjERMA8GA1UECgwIS29iZUtvYnoxCzAJBgNVBAYTAlBIMIIBIjAN
-BgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApZoAnZu0QdlVisHx/Bzv0/W8RHXV
-g7Ad3ySqTP7YlTLeLP1jHRibRXUZcc1G9N7vh0+rdNLC5We/IJ4I8S6SRhaRwBnV
-X/bwAgba8b+anKxuYHfJOzCfhbTE3I3kJvJFUciFu3DlsZaRmOo64p4GGejXEU64
-fzpcSBynbCyPXXXHpG2BsmVU5tcHdth1RvtOzx/wHsmO/DtvmbW48RkxUUmLd41G
-hXlJljbcalp0eDD5gvuoir1CorFduz/PYPL/AomcpwAFkSdPgKqfj1scB4v4iedN
-VnS7KXqPFZFyG9z4r8iCgt+epvsrromw9rqsC2dv/2n7qfOELqUbYFvz2wIDAQAB
-o1MwUTAdBgNVHQ4EFgQUcKFL6tckon2uS3xGrpe1Zpa68VEwHwYDVR0jBBgwFoAU
-cKFL6tckon2uS3xGrpe1Zpa68VEwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0B
-AQsFAAOCAQEAYQP0S67eoJWpAMavayS7NjK+6KMJtlmL8eot/3RKPLleOjEuCdLY
-QvrP0Tl3M5gGt+I6WO7r+HKT2PuCN8BshIob8OGAEkuQ/YKEg9QyvmSm2XbPVBaG
-RRFjvxFyeL4gtDlqb9hea62tep7+gCkeiccyp8+lmnS32rRtFa7PovmK5pUjkDOr
-dpvCQlKoCRjZ/+OfUaanzYQSDrxdTSN8RtJhCZtd45QbxEXzHTEaICXLuXL6cmv7
-tMuhgUoefS17gv1jqj/C9+6ogMVa+U7QqOvL5A7hbevHdF/k/TMn+qx4UdhrbL5Q
-enL3UGT+BhRAPiA1I5CcG29RqjCzQoaCNg==
------END CERTIFICATE-----
-EOF_CRT
+if [ ! -s /etc/xray/xray.key ] || [ ! -s /etc/xray/xray.crt ]; then
+  if [ "$DOMAIN_IS_IPV4" -eq 1 ]; then
+    XRAY_CERT_SAN="IP:$DOMAIN"
+  else
+    XRAY_CERT_SAN="DNS:$DOMAIN"
+  fi
+  if ! openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 825 \
+    -subj "/CN=$DOMAIN" -addext "subjectAltName=$XRAY_CERT_SAN" \
+    -keyout /etc/xray/xray.key -out /etc/xray/xray.crt; then
+    echo "Unable to generate the fallback TLS certificate."
+    exit 1
+  fi
+fi
 
-chmod 644 /etc/xray/xray.crt; chmod 600 /etc/xray/xray.key
+chmod 600 /etc/xray/xray.key
+chmod 644 /etc/xray/xray.crt
 
 # Copy and secure Stunnel cert
 cat /etc/xray/xray.key /etc/xray/xray.crt > /etc/stunnel/stunnel.pem
 chmod 600 /etc/stunnel/stunnel.pem; chown root:root /etc/stunnel/stunnel.pem
+
+if [ "$XRAY_CERT_SOURCE" = "letsencrypt" ]; then
+  mkdir -p /etc/letsencrypt/renewal-hooks/pre /etc/letsencrypt/renewal-hooks/deploy /etc/letsencrypt/renewal-hooks/post
+  cat <<'EOF_XRAY_CERT_PRE' > /etc/letsencrypt/renewal-hooks/pre/xray-stop.sh
+#!/bin/bash
+systemctl stop xray 2>/dev/null || true
+EOF_XRAY_CERT_PRE
+  cat <<'EOF_XRAY_CERT_RENEW' > /etc/letsencrypt/renewal-hooks/deploy/xray-cert.sh
+#!/bin/bash
+set -e
+umask 077
+install -m 600 "$RENEWED_LINEAGE/privkey.pem" /etc/xray/xray.key
+install -m 644 "$RENEWED_LINEAGE/fullchain.pem" /etc/xray/xray.crt
+cat /etc/xray/xray.key /etc/xray/xray.crt > /etc/stunnel/stunnel.pem.new
+install -m 600 /etc/stunnel/stunnel.pem.new /etc/stunnel/stunnel.pem
+rm -f /etc/stunnel/stunnel.pem.new
+mkdir -p /etc/haproxy/certs
+install -m 600 /etc/stunnel/stunnel.pem /etc/haproxy/certs/xray.pem
+systemctl reload haproxy 2>/dev/null || systemctl restart haproxy
+systemctl restart stunnel4 2>/dev/null || systemctl restart stunnel
+EOF_XRAY_CERT_RENEW
+  cat <<'EOF_XRAY_CERT_POST' > /etc/letsencrypt/renewal-hooks/post/xray-start.sh
+#!/bin/bash
+systemctl start xray 2>/dev/null || true
+EOF_XRAY_CERT_POST
+  chmod 700 /etc/letsencrypt/renewal-hooks/pre/xray-stop.sh \
+    /etc/letsencrypt/renewal-hooks/deploy/xray-cert.sh \
+    /etc/letsencrypt/renewal-hooks/post/xray-start.sh
+fi
 
 cat <<'deekay77' > /etc/zorro-luffy
 <br><font color="#C12267">GURUZGH | VPN | SERVICE<br></font><br>
@@ -484,11 +524,56 @@ for port in "${WsPorts[@]}"; do systemctl enable ws-proxy@$port; systemctl resta
 # === XRAY CORE ===
 echo "Installing Hiddify-aligned stable Xray Core v26.3.27..."
 XRAY_VER="v26.3.27"
-wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip"
-unzip -q -o /tmp/xray.zip -d /tmp/xray/
-mv -f /tmp/xray/xray /usr/local/bin/xray
-chmod +x /usr/local/bin/xray
-rm -rf /tmp/xray*
+
+cat <<'EOF_XRAY_INSTALLER' > /usr/local/sbin/xray-install-version
+#!/bin/bash
+set -o pipefail
+umask 077
+
+version="${1:?Usage: xray-install-version VERSION}"
+case "$(uname -m)" in
+  x86_64|amd64) asset="Xray-linux-64.zip" ;;
+  i386|i486|i586|i686) asset="Xray-linux-32.zip" ;;
+  aarch64|arm64) asset="Xray-linux-arm64-v8a.zip" ;;
+  armv7l|armv7*) asset="Xray-linux-arm32-v7a.zip" ;;
+  *) echo "Unsupported Xray architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+tmp_dir=$(mktemp -d /tmp/xray-install.XXXXXX) || exit 1
+trap 'rm -rf "$tmp_dir"' EXIT
+base_url="https://github.com/XTLS/Xray-core/releases/download/${version}/${asset}"
+
+wget -qO "$tmp_dir/xray.zip" "$base_url" || { echo "Xray download failed." >&2; exit 1; }
+wget -qO "$tmp_dir/xray.zip.dgst" "$base_url.dgst" || { echo "Xray digest download failed." >&2; exit 1; }
+expected=$(awk -F'= *' 'toupper($1) == "SHA2-256" {print tolower($2); exit}' "$tmp_dir/xray.zip.dgst")
+actual=$(sha256sum "$tmp_dir/xray.zip" | awk '{print tolower($1)}')
+[ -n "$expected" ] && [ "$actual" = "$expected" ] || { echo "Xray SHA-256 verification failed." >&2; exit 1; }
+
+unzip -q "$tmp_dir/xray.zip" -d "$tmp_dir/unpacked" || exit 1
+[ -f "$tmp_dir/unpacked/xray" ] || { echo "Xray binary missing from archive." >&2; exit 1; }
+chmod 755 "$tmp_dir/unpacked/xray"
+if [ -s /etc/xray/config.json ]; then
+  "$tmp_dir/unpacked/xray" run -test -config /etc/xray/config.json || {
+    echo "The downloaded Xray version rejected the current configuration." >&2
+    exit 1
+  }
+fi
+install -m 755 "$tmp_dir/unpacked/xray" /usr/local/bin/xray.new
+mv -f /usr/local/bin/xray.new /usr/local/bin/xray
+EOF_XRAY_INSTALLER
+chmod 700 /usr/local/sbin/xray-install-version
+
+if ! /usr/local/sbin/xray-install-version "$XRAY_VER"; then
+  echo "Unable to install a verified Xray Core ${XRAY_VER} binary."
+  exit 1
+fi
+
+for reality_sni in "$REALITY_TCP_SNI" "$REALITY_GRPC_SNI" "$REALITY_XHTTP_SNI"; do
+  if ! timeout 15 /usr/local/bin/xray tls ping "${reality_sni}:443" >/dev/null 2>&1; then
+    echo "WARNING: REALITY target ${reality_sni}:443 did not pass xray tls ping."
+    echo "The installer will continue, but replace this target if REALITY clients cannot connect."
+  fi
+done
 
 touch /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt
 chmod 600 /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt
@@ -513,6 +598,7 @@ fi
 REALITY_TCP_SID=$(openssl rand -hex 8)
 REALITY_GRPC_SID=$(openssl rand -hex 8)
 REALITY_XHTTP_SID=$(openssl rand -hex 8)
+XRAY_KCP_SEED="${XRAY_KCP_SEED:-$(openssl rand -base64 32 | tr -d '\n')}"
 SS_MASTER_KEY=$(openssl rand -base64 32 | tr -d '\n')
 
 {
@@ -529,6 +615,8 @@ SS_MASTER_KEY=$(openssl rand -base64 32 | tr -d '\n')
   printf 'XRAY_SS_PORT=%q\n' "$XRAY_SS_PORT"
   printf 'XRAY_SS_METHOD=%q\n' "$XRAY_SS_METHOD"
   printf 'SS_MASTER_KEY=%q\n' "$SS_MASTER_KEY"
+  printf 'XRAY_TLS_ALLOW_INSECURE=%q\n' "$XRAY_TLS_ALLOW_INSECURE"
+  printf 'XRAY_CERT_SOURCE=%q\n' "$XRAY_CERT_SOURCE"
 } > /etc/xray/server.env
 chmod 600 /etc/xray/server.env
 
@@ -769,10 +857,17 @@ cat <<EOF > /etc/xray/config.json
         "network": "kcp",
         "security": "none",
         "kcpSettings": {
-          "seed": "${XRAY_KCP_SEED}",
           "congestion": true,
           "uplinkCapacity": 100,
           "downlinkCapacity": 100
+        },
+        "finalmask": {
+          "udp": [
+            {
+              "type": "mkcp-aes128gcm",
+              "settings": { "password": "${XRAY_KCP_SEED}" }
+            }
+          ]
         }
       }
     },
@@ -795,10 +890,11 @@ cat <<EOF > /etc/xray/config.json
   ]
 }
 EOF
+chmod 600 /etc/xray/config.json
 
 mkdir -p /var/log/xray
 if ! /usr/local/bin/xray run -test -config /etc/xray/config.json; then
-  echo "Xray configuration validation failed."
+  echo "Xray configuration validation failed. Review the Xray error printed above."
   exit 1
 fi
 
@@ -882,16 +978,27 @@ frontend normal_tls_terminator
     tcp-request content accept if h2_preface
     use_backend h2_dispatch if negotiated_h2 h2_preface
 
-    # HTTP/1.1 path-based transports. Specific Trojan paths must be checked
-    # before the legacy /trojan WebSocket path.
-    use_backend trojan_xhttp_h1 if { path_beg /trojan-xhttp }
-    use_backend trojan_httpupgrade if { path_beg /trojan-httpupgrade }
-    use_backend trojan_tcp_http if { path_beg /trojan-tcp }
-    use_backend vless_xhttp_h1 if { path_beg /xhttp }
-    use_backend vless_httpupgrade if { path_beg /httpupgrade }
-    use_backend vless_tcp_http if { path_beg /vless-tcp }
-    use_backend trojan_ws if { path -i /trojan }
-    use_backend vless_ws if { path -i /vless }
+    # This frontend must remain TCP so raw VLESS and HTTP-camouflage transports
+    # are not rewritten. Inspect the buffered HTTP/1 request line with the
+    # TCP-safe payload fetch instead of HTTP-only path/path_beg fetches.
+    acl h1_trojan_xhttp req.payload(0,500) -m reg /trojan-xhttp
+    acl h1_trojan_httpupgrade req.payload(0,500) -m reg /trojan-httpupgrade
+    acl h1_trojan_tcp req.payload(0,500) -m reg /trojan-tcp
+    acl h1_vless_xhttp req.payload(0,500) -m reg /xhttp
+    acl h1_vless_httpupgrade req.payload(0,500) -m reg /httpupgrade
+    acl h1_vless_tcp req.payload(0,500) -m reg /vless-tcp
+    acl h1_trojan_ws req.payload(0,500) -m reg /trojan
+    acl h1_vless_ws req.payload(0,500) -m reg /vless
+
+    # Specific paths must precede the shorter legacy WebSocket paths.
+    use_backend trojan_xhttp_h1 if HTTP h1_trojan_xhttp
+    use_backend trojan_httpupgrade if HTTP h1_trojan_httpupgrade
+    use_backend trojan_tcp_http if HTTP h1_trojan_tcp
+    use_backend vless_xhttp_h1 if HTTP h1_vless_xhttp
+    use_backend vless_httpupgrade if HTTP h1_vless_httpupgrade
+    use_backend vless_tcp_http if HTTP h1_vless_tcp
+    use_backend trojan_ws if HTTP h1_trojan_ws
+    use_backend vless_ws if HTTP h1_vless_ws
 
     acl clear_ssh req.payload(0,4) -m str SSH-
     use_backend sslh_clear if clear_ssh
@@ -990,33 +1097,53 @@ iptables -C INPUT -p tcp --dport "$XRAY_SS_PORT" -j ACCEPT 2>/dev/null || iptabl
 cat <<'EOF_EXP' > /usr/local/bin/exp-check
 #!/bin/bash
 set -o pipefail
+umask 077
 now=$(date +%Y-%m-%d)
 CONFIG="/etc/xray/config.json"
-changed=0
+[ -s "$CONFIG" ] || exit 0
+
+exec 9>/run/lock/xray-config.lock
+flock -w 30 9 || { logger -t xray-exp "Timed out waiting for the Xray config lock"; exit 1; }
+
+work_dir=$(mktemp -d /tmp/xray-exp.XXXXXX) || exit 1
+trap 'rm -rf "$work_dir"' EXIT
+
+mapfile -t expired_users < <(
+  for proto in vless trojan shadowsocks; do
+    db="/etc/xray/${proto}.txt"
+    [ -f "$db" ] && awk -v d="$now" '$3 < d {print $1}' "$db"
+  done | sort -u
+)
+[ "${#expired_users[@]}" -gt 0 ] || exit 0
+
+expired_json=$(printf '%s\n' "${expired_users[@]}" | jq -R . | jq -s .) || exit 1
+jq --argjson expired "$expired_json" '
+  (.inbounds[] | select(((.settings.clients? // null) | type) == "array") | .settings.clients) |=
+    map(. as $client | select(($expired | index($client.email)) == null)) |
+  (.inbounds[] | select(((.settings.users? // null) | type) == "array") | .settings.users) |=
+    map(. as $user | select(($expired | index($user.email)) == null))
+' "$CONFIG" > "$work_dir/config.json" || exit 1
+
+if ! /usr/local/bin/xray run -test -config "$work_dir/config.json" >/dev/null 2>&1; then
+  logger -t xray-exp "Refusing expiry update: generated Xray config failed validation"
+  exit 1
+fi
+
+cp -p "$CONFIG" "$work_dir/config.backup" || exit 1
+install -m 600 "$work_dir/config.json" "$CONFIG" || exit 1
+if ! systemctl restart xray; then
+  install -m 600 "$work_dir/config.backup" "$CONFIG"
+  systemctl restart xray || true
+  logger -t xray-exp "Expiry update rolled back because Xray failed to restart"
+  exit 1
+fi
 
 for proto in vless trojan shadowsocks; do
   db="/etc/xray/${proto}.txt"
   [ -f "$db" ] || continue
-  mapfile -t expired_users < <(awk -v d="$now" '$3 < d {print $1}' "$db")
-  for user in "${expired_users[@]}"; do
-    jq --arg user "$user" '
-      (.inbounds[] | select(((.settings.clients? // null) | type) == "array") | .settings.clients) |= map(select(.email != $user)) |
-      (.inbounds[] | select(((.settings.users? // null) | type) == "array") | .settings.users) |= map(select(.email != $user))
-    ' "$CONFIG" > /tmp/xray-exp.json || exit 1
-    mv /tmp/xray-exp.json "$CONFIG"
-    sed -i "/^${user} /d" "$db"
-    changed=1
-  done
+  awk -v d="$now" '$3 >= d {print}' "$db" > "$work_dir/${proto}.txt" || exit 1
+  install -m 600 "$work_dir/${proto}.txt" "$db" || exit 1
 done
-
-if [ "$changed" -eq 1 ]; then
-  if /usr/local/bin/xray run -test -config "$CONFIG" >/dev/null 2>&1; then
-    systemctl restart xray
-  else
-    logger -t xray-exp "Refusing to restart: generated Xray config failed validation"
-    exit 1
-  fi
-fi
 EOF_EXP
 chmod +x /usr/local/bin/exp-check
 echo "0 0 * * * root /usr/local/bin/exp-check >/dev/null 2>&1" > /etc/cron.d/xray-expiry
@@ -1098,7 +1225,10 @@ mkdir -p /etc/deekayvpn/health
 cat <<'ServiceChecker' > /etc/deekayvpn/service_checker.sh
 #!/bin/bash
 MYID="MYCHATID"; KEY="MYBOTID"; URL="https://api.telegram.org/bot${KEY}/sendMessage"
-send_telegram_message() { curl -s --max-time 10 --retry 5 --retry-delay 2 --retry-max-time 10 -d "chat_id=${MYID}&text=$1&disable_web_page_preview=true&parse_mode=markdown" "${URL}" >/dev/null 2>&1; }
+send_telegram_message() {
+    [ -n "$MYID" ] && [ -n "$KEY" ] || return 0
+    curl -s --max-time 10 --retry 5 --retry-delay 2 --retry-max-time 10 -d "chat_id=${MYID}&text=$1&disable_web_page_preview=true&parse_mode=markdown" "${URL}" >/dev/null 2>&1
+}
 server_ip="IPADDRESS"; datenow=$(date +"%Y-%m-%d %T"); IPCOUNTRY=$(curl -s "https://freeipapi.com/api/json/${server_ip}" | jq -r '.countryName')
 STATE_DIR="/etc/deekayvpn/health"
 check_port() { ss -lnt | awk '{print $4}' | grep -q ":$1$"; }
@@ -1121,7 +1251,7 @@ if check_port SQUIDPORT1 && check_port SQUIDPORT2 && systemctl is-active --quiet
 if check_port NGINXPORT && systemctl is-active --quiet nginx; then clear_fail nginx; else restart_after_3_fails nginx nginx "NGINXPORT"; fi
 for port in 10080 2082 2086; do if check_port $port && systemctl is-active --quiet ws-proxy@$port; then clear_fail ws-proxy-$port; else restart_after_3_fails ws-proxy-$port ws-proxy@$port "$port"; fi; done
 if check_port 443 && systemctl is-active --quiet haproxy; then clear_fail haproxy; else restart_after_3_fails haproxy haproxy "443"; fi
-if check_port 10443 && check_port 10003 && check_port 10004 && check_port 10006 && check_port 10101 && check_port 10104 && check_port 10106 && check_port 11001 && check_port 11002 && check_port 11003 && check_port XRAYSSPORT && check_udp_port XRAYSSPORT && check_udp_port XRAYKCPPORT && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "TLS transports, REALITY, SS, mKCP"; fi
+if check_port 10443 && check_port 10003 && check_port 10004 && check_port 10005 && check_port 10006 && check_port 10007 && check_port 10101 && check_port 10104 && check_port 10105 && check_port 10106 && check_port 10107 && check_port 11001 && check_port 11002 && check_port 11003 && check_port XRAYSSPORT && check_udp_port XRAYSSPORT && check_udp_port XRAYKCPPORT && systemctl is-active --quiet xray; then clear_fail xray; else restart_after_3_fails xray xray "TLS transports, REALITY, SS, mKCP"; fi
 if systemctl is-active --quiet hysteria-server; then clear_fail hysteria-server; else restart_after_3_fails hysteria-server hysteria-server "UDP"; fi
 if systemctl is-active --quiet udp-custom; then clear_fail udp-custom; else restart_after_3_fails udp-custom udp-custom "UDP"; fi
 if systemctl is-active --quiet zivpn; then clear_fail zivpn; else restart_after_3_fails zivpn zivpn "UDP"; fi
@@ -1649,6 +1779,20 @@ mem_stats() { free -h 2>/dev/null | awk '/Mem:/ {print $2 "|" $7 "|" $3}'; }
 ram_percent() { free 2>/dev/null | awk '/Mem:/ { if ($2>0) printf "%.1f%%", ($3/$2)*100; else print "0.0%" }'; }
 cpu_percent() { top -bn1 2>/dev/null | awk -F',' '/Cpu\(s\)/ { gsub("%us","",$1); gsub(" ","",$1); split($1,a,":"); if (a[2] == "") print "0.0%"; else printf "%.1f%%", a[2]+0 }'; }
 buffer_mem() { free -m 2>/dev/null | awk '/Mem:/ {print $6 "M"}'; }
+valid_server_name() {
+  local value="$1" IFS=. octet
+  local -a parts
+  if [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    read -r -a parts <<< "$value"
+    [ "${#parts[@]}" -eq 4 ] || return 1
+    for octet in "${parts[@]}"; do
+      [[ "$octet" =~ ^[0-9]{1,3}$ ]] && (( 10#$octet <= 255 )) || return 1
+    done
+    return 0
+  fi
+  [ "${#value}" -le 253 ] &&
+    [[ "$value" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]
+}
 
 server_status() {
   local ok=0
@@ -1878,33 +2022,44 @@ speed_hysteria() {
 
 # --- XRAY MANAGEMENT FUNCTIONS ---
 xray_commit_tmp() {
-  local tmp="$1"
-  if ! jq empty "$tmp" >/dev/null 2>&1; then
-    echo -e "${RED}Generated JSON is invalid.${NC}"
-    rm -f "$tmp"
+  local tmp="$1" test_log="${1}.test.log" backup="${1}.backup"
+  if ! (
+    flock -w 30 9 || { echo -e "${RED}Timed out waiting for the Xray configuration lock.${NC}"; exit 1; }
+    if ! jq empty "$tmp" >/dev/null 2>&1; then
+      echo -e "${RED}Generated JSON is invalid.${NC}"
+      exit 1
+    fi
+    if ! /usr/local/bin/xray run -test -config "$tmp" >"$test_log" 2>&1; then
+      echo -e "${RED}Xray rejected the generated configuration:${NC}"
+      cat "$test_log"
+      exit 1
+    fi
+    cp -p "$XRAY_CONFIG" "$backup" || exit 1
+    install -m 600 "$tmp" "$XRAY_CONFIG" || exit 1
+    if ! systemctl restart xray; then
+      install -m 600 "$backup" "$XRAY_CONFIG"
+      systemctl restart xray || true
+      echo -e "${RED}Xray failed to restart; the previous configuration was restored.${NC}"
+      exit 1
+    fi
+  ) 9>/run/lock/xray-config.lock; then
+    rm -f "$tmp" "$test_log" "$backup"
     return 1
   fi
-  if ! /usr/local/bin/xray run -test -config "$tmp" >/tmp/xray-menu-test.log 2>&1; then
-    echo -e "${RED}Xray rejected the generated configuration:${NC}"
-    cat /tmp/xray-menu-test.log
-    rm -f "$tmp"
-    return 1
-  fi
-  install -m 600 "$tmp" "$XRAY_CONFIG"
-  rm -f "$tmp"
-  systemctl restart xray
+  rm -f "$tmp" "$test_log" "$backup"
 }
 
 print_vless_links() {
   local user="$1" uuid="$2"
   [ -f "$XRAY_SERVER_ENV" ] && source "$XRAY_SERVER_ENV"
+  local tls_insecure="${XRAY_TLS_ALLOW_INSECURE:-1}"
   echo -e "\n${YELLOW}[ VLESS TLS / SHARED PORT 443 ]${NC}\n"
-  echo -e "RAW Legacy: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&sni=${DOMAIN}&allowInsecure=1#${user}-VLESS-RAW\n"
-  echo -e "TCP HTTP:  vless://${uuid}@${DOMAIN}:443?type=tcp&headerType=http&security=tls&encryption=none&host=${DOMAIN}&path=%2Fvless-tcp&sni=${DOMAIN}&allowInsecure=1#${user}-VLESS-TCP\n"
-  echo -e "WS:        vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-VLESS-WS\n"
-  echo -e "XHTTP:     vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-VLESS-XHTTP\n"
-  echo -e "HTTPUp:    vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-VLESS-HTTPUp\n"
-  echo -e "gRPC:      vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-VLESS-gRPC\n"
+  echo -e "RAW Legacy: vless://${uuid}@${DOMAIN}:443?type=tcp&security=tls&encryption=none&sni=${DOMAIN}&allowInsecure=${tls_insecure}#${user}-VLESS-RAW\n"
+  echo -e "TCP HTTP:  vless://${uuid}@${DOMAIN}:443?type=tcp&headerType=http&security=tls&encryption=none&host=${DOMAIN}&path=%2Fvless-tcp&sni=${DOMAIN}&allowInsecure=${tls_insecure}#${user}-VLESS-TCP\n"
+  echo -e "WS:        vless://${uuid}@${DOMAIN}:443?type=ws&security=tls&encryption=none&path=%2Fvless&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=${tls_insecure}#${user}-VLESS-WS\n"
+  echo -e "XHTTP:     vless://${uuid}@${DOMAIN}:443?type=xhttp&security=tls&encryption=none&path=%2Fxhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=${tls_insecure}&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-VLESS-XHTTP\n"
+  echo -e "HTTPUp:    vless://${uuid}@${DOMAIN}:443?type=httpupgrade&security=tls&encryption=none&path=%2Fhttpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=${tls_insecure}#${user}-VLESS-HTTPUp\n"
+  echo -e "gRPC:      vless://${uuid}@${DOMAIN}:443?type=grpc&security=tls&encryption=none&serviceName=grpc-svc&sni=${DOMAIN}&allowInsecure=${tls_insecure}&alpn=h2#${user}-VLESS-gRPC\n"
 
   echo -e "${YELLOW}[ VLESS REALITY / SHARED PORT 443 ]${NC}\n"
   echo -e "Reality TCP:   vless://${uuid}@${DOMAIN}:443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&sni=${REALITY_TCP_SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_TCP_SID}#${user}-REALITY-TCP\n"
@@ -1912,7 +2067,10 @@ print_vless_links() {
   echo -e "Reality XHTTP: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=reality&encryption=none&path=%2Freality-xhttp&mode=auto&sni=${REALITY_XHTTP_SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_XHTTP_SID}#${user}-REALITY-XHTTP\n"
 
   echo -e "${YELLOW}[ VLESS mKCP UDP ]${NC}\n"
-  echo -e "mKCP: vless://${uuid}@${DOMAIN}:${XRAY_KCP_PORT}?type=kcp&security=none&encryption=none&headerType=none&seed=${XRAY_KCP_SEED}#${user}-VLESS-mKCP\n"
+  local mkcp_fm_json mkcp_fm
+  mkcp_fm_json=$(jq -cn --arg password "$XRAY_KCP_SEED" '{udp:[{type:"mkcp-aes128gcm",settings:{password:$password}}]}')
+  mkcp_fm=$(jq -rn --arg value "$mkcp_fm_json" '$value|@uri')
+  echo -e "mKCP: vless://${uuid}@${DOMAIN}:${XRAY_KCP_PORT}?type=kcp&security=none&encryption=none&fm=${mkcp_fm}#${user}-VLESS-mKCP\n"
 
   echo -e "${YELLOW}[ VLESS NTLS (80/8080/8880) ]${NC}\n"
   echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none#${user}-VLESS-NTLS-TCP\n"
@@ -1922,12 +2080,14 @@ print_vless_links() {
 
 print_trojan_links() {
   local user="$1" pass="$2"
+  [ -f "$XRAY_SERVER_ENV" ] && source "$XRAY_SERVER_ENV"
+  local tls_insecure="${XRAY_TLS_ALLOW_INSECURE:-1}"
   echo -e "\n${YELLOW}[ TROJAN TLS / SHARED PORT 443 ]${NC}\n"
-  echo -e "TCP HTTP: trojan://${pass}@${DOMAIN}:443?type=tcp&headerType=http&security=tls&host=${DOMAIN}&path=%2Ftrojan-tcp&sni=${DOMAIN}&allowInsecure=1#${user}-TROJAN-TCP\n"
-  echo -e "WS:       trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-TROJAN-WS\n"
-  echo -e "XHTTP:    trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-TROJAN-XHTTP\n"
-  echo -e "HTTPUp:   trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-httpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=1#${user}-TROJAN-HTTPUp\n"
-  echo -e "gRPC:     trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&sni=${DOMAIN}&allowInsecure=1&alpn=h2#${user}-TROJAN-gRPC\n"
+  echo -e "TCP HTTP: trojan://${pass}@${DOMAIN}:443?type=tcp&headerType=http&security=tls&host=${DOMAIN}&path=%2Ftrojan-tcp&sni=${DOMAIN}&allowInsecure=${tls_insecure}#${user}-TROJAN-TCP\n"
+  echo -e "WS:       trojan://${pass}@${DOMAIN}:443?type=ws&security=tls&path=%2Ftrojan&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=${tls_insecure}#${user}-TROJAN-WS\n"
+  echo -e "XHTTP:    trojan://${pass}@${DOMAIN}:443?type=xhttp&security=tls&path=%2Ftrojan-xhttp&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=${tls_insecure}&mode=auto&alpn=h2%2Chttp%2F1.1#${user}-TROJAN-XHTTP\n"
+  echo -e "HTTPUp:   trojan://${pass}@${DOMAIN}:443?type=httpupgrade&security=tls&path=%2Ftrojan-httpupgrade&host=${DOMAIN}&sni=${DOMAIN}&allowInsecure=${tls_insecure}#${user}-TROJAN-HTTPUp\n"
+  echo -e "gRPC:     trojan://${pass}@${DOMAIN}:443?type=grpc&security=tls&serviceName=trojan-grpc&sni=${DOMAIN}&allowInsecure=${tls_insecure}&alpn=h2#${user}-TROJAN-gRPC\n"
 }
 
 print_shadowsocks_link() {
@@ -1974,7 +2134,7 @@ add_xray() {
     fi
   fi
 
-  pass="Guruz${uuid:0:8}"
+  pass=$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=\n')
   ss_user_key=$(openssl rand -base64 32 | tr -d '\n')
   tmp=$(mktemp /tmp/xray-menu.XXXXXX.json)
 
@@ -2062,7 +2222,14 @@ del_xray() {
     (.inbounds[] | select(((.settings.users? // null) | type) == "array") | .settings.users) |= map(select(.email != $user))
   ' "$XRAY_CONFIG" > "$tmp" || { rm -f "$tmp"; pause_return; return; }
   xray_commit_tmp "$tmp" || { pause_return; return; }
-  sed -i "/^${user} /d" /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt 2>/dev/null
+  for db in /etc/xray/vless.txt /etc/xray/trojan.txt /etc/xray/shadowsocks.txt; do
+    [ -f "$db" ] || continue
+    db_tmp=$(mktemp "${db}.XXXXXX") || continue
+    if awk -v u="$user" '$1 != u {print}' "$db" > "$db_tmp"; then
+      install -m 600 "$db_tmp" "$db"
+    fi
+    rm -f "$db_tmp"
+  done
   echo -e "\n${GREEN}✔ User $user deleted successfully.${NC}"
   pause_return
 }
@@ -2389,8 +2556,28 @@ change_domain() {
     echo -e " Current Domain/IP: ${YELLOW}$current_dom${NC}\n"
     read -rp " Enter New Domain or IP: " new_dom
     if [ -n "$new_dom" ]; then
+        if ! valid_server_name "$new_dom"; then
+            echo -e "\n${RED}Enter a valid DNS hostname or IPv4 address.${NC}"
+            pause_return
+            return
+        fi
         echo "$new_dom" > /etc/deekayvpn/domain.txt; DOMAIN="$new_dom"
+        tls_insecure=1
+        if [ "${XRAY_CERT_SOURCE:-self-signed}" = "letsencrypt" ]; then
+            if [[ "$new_dom" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                openssl x509 -in /etc/xray/xray.crt -noout -checkip "$new_dom" >/dev/null 2>&1 && tls_insecure=0
+            else
+                openssl x509 -in /etc/xray/xray.crt -noout -checkhost "$new_dom" >/dev/null 2>&1 && tls_insecure=0
+            fi
+        fi
+        if grep -q '^XRAY_TLS_ALLOW_INSECURE=' "$XRAY_SERVER_ENV" 2>/dev/null; then
+            sed -i "s/^XRAY_TLS_ALLOW_INSECURE=.*/XRAY_TLS_ALLOW_INSECURE=$tls_insecure/" "$XRAY_SERVER_ENV"
+        else
+            echo "XRAY_TLS_ALLOW_INSECURE=$tls_insecure" >> "$XRAY_SERVER_ENV"
+        fi
+        XRAY_TLS_ALLOW_INSECURE="$tls_insecure"
         echo -e "\n${GREEN}✔ Domain successfully updated to: $new_dom${NC}"
+        [ "$tls_insecure" -eq 1 ] && echo -e "${YELLOW}The installed certificate does not verify this name; generated links will use allowInsecure=1 until a matching certificate is installed.${NC}"
     else echo -e "\n${RED}Action cancelled.${NC}"; fi
     pause_return
 }
@@ -2465,6 +2652,8 @@ remove_script() {
       rm -f /etc/systemd/system/ws-proxy@.service /etc/systemd/system/server-sldns.service /etc/systemd/system/badvpn.service /etc/systemd/system/xray.service
       rm -f /etc/systemd/system/udp-custom.service /etc/systemd/system/zivpn.service /etc/systemd/system/zivpn-nat.service
       rm -f /etc/cron.d/service-checker /etc/cron.d/logrotate /etc/cron.d/xray-expiry /etc/cron.d/hysteria-expiry /etc/cron.d/zivpn-expiry /etc/sysctl.d/99-freenet-tuning.conf /etc/security/limits.d/99-freenet.conf
+      rm -f /usr/local/bin/xray /usr/local/sbin/xray-install-version /usr/local/bin/exp-check
+      rm -f /etc/letsencrypt/renewal-hooks/pre/xray-stop.sh /etc/letsencrypt/renewal-hooks/deploy/xray-cert.sh /etc/letsencrypt/renewal-hooks/post/xray-start.sh
       rm -rf /etc/deekayvpn /etc/slowdns /etc/socksproxy /etc/xray /etc/hysteria /etc/zivpn /etc/haproxy/haproxy.cfg /etc/haproxy/certs /etc/systemd/system/haproxy.service.d /root/udp /usr/local/bin/menu /usr/bin/menu /usr/bin/Menu
       systemctl daemon-reload; sysctl --system >/dev/null 2>&1 || true
       echo -e "${GREEN}✔ Removal complete.${NC}"
@@ -2531,7 +2720,34 @@ while true; do
       while true; do
         clear; echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}\n                   ${BOLD}XRAY ACCOUNT MANAGEMENT${NC}\n${CYAN}══════════════════════════════════════════════════════════════${NC}"
         echo -e "  [${YELLOW}1${NC}] Add Xray Account\n  [${YELLOW}2${NC}] Renew Xray Account\n  [${YELLOW}3${NC}] Delete Xray Account\n  [${YELLOW}4${NC}] Show Config Links\n  [${YELLOW}5${NC}] Force Delete Expired Xray Users Now\n  [${YELLOW}6${NC}] Update Xray Core Version\n  [${YELLOW}0${NC}] Back\n"
-        read -rp "  ► Option: " sub; case "$sub" in 1) add_xray;; 2) renew_xray;; 3) del_xray;; 4) show_xray;; 5) /usr/local/bin/exp-check; echo "Expired Xray users wiped."; pause_return;; 6) systemctl stop xray; XRAY_VER="v26.3.27"; echo "Reinstalling Xray Core ${XRAY_VER}..."; wget -qO /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip"; unzip -q -o /tmp/xray.zip -d /tmp/xray/ && mv -f /tmp/xray/xray /usr/local/bin/xray; systemctl start xray; echo -e "${GREEN}✔ Xray Restored to ${XRAY_VER}!${NC}"; pause_return;; 0) break;; esac
+        read -rp "  ► Option: " sub
+        case "$sub" in
+          1) add_xray ;;
+          2) renew_xray ;;
+          3) del_xray ;;
+          4) show_xray ;;
+          5) if /usr/local/bin/exp-check; then echo "Expired Xray users checked."; else echo -e "${RED}Xray expiry check failed.${NC}"; fi; pause_return ;;
+          6)
+            XRAY_VER="v26.3.27"
+            echo "Installing verified Xray Core ${XRAY_VER}..."
+            xray_rollback=$(mktemp /tmp/xray-binary.XXXXXX) || xray_rollback=""
+            if [ -n "$xray_rollback" ]; then
+              cp -p /usr/local/bin/xray "$xray_rollback" || { rm -f "$xray_rollback"; xray_rollback=""; }
+            fi
+            if /usr/local/sbin/xray-install-version "$XRAY_VER" && systemctl restart xray; then
+              echo -e "${GREEN}✔ Xray updated to ${XRAY_VER}.${NC}"
+            else
+              if [ -n "$xray_rollback" ] && [ -s "$xray_rollback" ]; then
+                install -m 755 "$xray_rollback" /usr/local/bin/xray
+                systemctl restart xray || true
+              fi
+              echo -e "${RED}Xray update failed; review the error above.${NC}"
+            fi
+            [ -n "$xray_rollback" ] && rm -f "$xray_rollback"
+            pause_return
+            ;;
+          0) break ;;
+        esac
       done ;;
     3|03)
       while true; do
