@@ -20,7 +20,7 @@ esac
 
 echo "======================================================================="
 echo "              Guruz GH SSH Script Installer"
-echo "        (Multi-Protocol Edition: SSH/Xray/Hysteria/ZiVPN/UDP-Custom)"
+echo "        (Multi-Protocol Edition: SSH/Xray/Hysteria/ZiVPN/UDP Custom)"
 echo "======================================================================="
 echo ""
 echo "Supported Operating Systems:"
@@ -965,11 +965,11 @@ frontend h2_router
     bind 127.0.0.1:10444 accept-proxy
     mode http
 
-    # New routes for WS and HTTPUpgrade over H2
-    use_backend trojan_ws if { path_beg /trojan }
-    use_backend vless_ws if { path_beg /vless }
+    # Match specific paths before their shorter WebSocket prefixes.
     use_backend trojan_httpupgrade if { path_beg /trojan-httpupgrade }
     use_backend vless_httpupgrade if { path_beg /httpupgrade }
+    use_backend trojan_ws if { path_beg /trojan }
+    use_backend vless_ws if { path_beg /vless }
 
     # Existing routes
     use_backend trojan_grpc_h2 if { path_beg /trojan-grpc }
@@ -985,9 +985,11 @@ backend vless_tcp_http
     server xray 127.0.0.1:10007 send-proxy-v2
 
 backend vless_ws
+    mode http
     server xray 127.0.0.1:10003 send-proxy-v2
 
 backend vless_httpupgrade
+    mode http
     server xray 127.0.0.1:10005 send-proxy-v2
 
 backend vless_xhttp_h1
@@ -1005,9 +1007,11 @@ backend trojan_tcp_http
     server xray 127.0.0.1:10107 send-proxy-v2
 
 backend trojan_ws
+    mode http
     server xray 127.0.0.1:10101 send-proxy-v2
 
 backend trojan_httpupgrade
+    mode http
     server xray 127.0.0.1:10105 send-proxy-v2
 
 backend trojan_xhttp_h1
