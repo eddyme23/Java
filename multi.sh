@@ -856,18 +856,11 @@ cat <<EOF > /etc/xray/config.json
       "streamSettings": {
         "network": "kcp",
         "security": "none",
-        "kcpSettings": {
+      "kcpSettings": {
           "congestion": true,
           "uplinkCapacity": 100,
-          "downlinkCapacity": 100
-        },
-        "finalmask": {
-          "udp": [
-            {
-              "type": "mkcp-aes128gcm",
-              "settings": { "password": "${XRAY_KCP_SEED}" }
-            }
-          ]
+          "downlinkCapacity": 100,
+          "seed": "${XRAY_KCP_SEED}"
         }
       }
     },
@@ -945,7 +938,8 @@ frontend public_sni_443
     bind :443 v4v6 tfo
     mode tcp
     tcp-request inspect-delay 5s
-    tcp-request content accept if { req.ssl_hello_type 1 }
+    tcp-request content accept if { req.ssl_hello_type 1 } { req.ssl_sni -m found }
+    #tcp-request content accept if { req.ssl_hello_type 1 }
 
     acl reality_tcp_sni req.ssl_sni -i ${REALITY_TCP_SNI}
     acl reality_grpc_sni req.ssl_sni -i ${REALITY_GRPC_SNI}
@@ -1010,10 +1004,18 @@ frontend normal_tls_terminator
 backend h2_dispatch
     server h2_router 127.0.0.1:10444 send-proxy-v2
 
+
 frontend h2_router
     bind 127.0.0.1:10444 accept-proxy
     mode http
 
+    # New routes for WS and HTTPUpgrade over H2
+    use_backend trojan_ws if { path_beg /trojan }
+    use_backend vless_ws if { path_beg /vless }
+    use_backend trojan_httpupgrade if { path_beg /trojan-httpupgrade }
+    use_backend vless_httpupgrade if { path_beg /httpupgrade }
+
+    # Existing routes
     use_backend trojan_grpc_h2 if { path_beg /trojan-grpc }
     use_backend vless_grpc_h2 if { path_beg /grpc-svc }
     use_backend trojan_xhttp_h2 if { path_beg /trojan-xhttp }
@@ -2067,10 +2069,7 @@ print_vless_links() {
   echo -e "Reality XHTTP: vless://${uuid}@${DOMAIN}:443?type=xhttp&security=reality&encryption=none&path=%2Freality-xhttp&mode=auto&sni=${REALITY_XHTTP_SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_XHTTP_SID}#${user}-REALITY-XHTTP\n"
 
   echo -e "${YELLOW}[ VLESS mKCP UDP ]${NC}\n"
-  local mkcp_fm_json mkcp_fm
-  mkcp_fm_json=$(jq -cn --arg password "$XRAY_KCP_SEED" '{udp:[{type:"mkcp-aes128gcm",settings:{password:$password}}]}')
-  mkcp_fm=$(jq -rn --arg value "$mkcp_fm_json" '$value|@uri')
-  echo -e "mKCP: vless://${uuid}@${DOMAIN}:${XRAY_KCP_PORT}?type=kcp&security=none&encryption=none&fm=${mkcp_fm}#${user}-VLESS-mKCP\n"
+  echo -e "mKCP: vless://${uuid}@${DOMAIN}:${XRAY_KCP_PORT}?type=kcp&security=none&encryption=none&seed=${XRAY_KCP_SEED}#${user}-VLESS-mKCP\n"
 
   echo -e "${YELLOW}[ VLESS NTLS (80/8080/8880) ]${NC}\n"
   echo -e "TCP: vless://${uuid}@${DOMAIN}:80?type=tcp&security=none&encryption=none#${user}-VLESS-NTLS-TCP\n"
